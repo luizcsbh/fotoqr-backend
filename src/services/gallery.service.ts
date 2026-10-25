@@ -1,0 +1,162 @@
+import archiver from 'archiver';
+import fs from 'fs';
+import path from 'path';
+import { eq, and, desc, sql, inArray } from 'drizzle-orm';
+import { db } from '../config/database.js';
+import { photos, events, Photo } from '../models/schema.js';
+import { localStorageService } from './local.storage.service.js';
+import { logger } from '../utils/logger.js';
+
+export interface PhotoWithUrl extends Photo {
+  url: string;
+}
+
+export interface PaginatedPhotos {
+  photos: PhotoWithUrl[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export class GalleryService {
+  /**
+   * Retrieves paginated photos for an event with formatted access URLs.
+   */
+  async getEventPhotos(
+    eventId: number,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<PaginatedPhotos> {
+    const validPage = Math.max(1, page);
+    const validLimit = Math.min(100, Math.max(1, limit));
+    const offset = (validPage - 1) * validLimit;
+
+    // Get total count
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(photos)
+      .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')));
+
+    const total = countResult?.count || 0;
+    const totalPages = Math.ceil(total / validLimit);
+
+    // Get records
+    const photoList = await db
+      .select()
+      .from(photos)
+      .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')))
+      .orderBy(desc(photos.uploadedAt))
+      .limit(validLimit)
+      .offset(offset);
+
+    // Resolve URLs
+    const photosWithUrl: PhotoWithUrl[] = photoList.map((photo) => {
+      let url = '';
+      if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
+        url = localStorageService.getPhotoUrl(photo.storagePath);
+      } else if (photo.storageProvider === 'google_photos') {
+        url = photo.storagePath.startsWith('http') ? photo.storagePath : `/api/photos/${photo.id}/preview`;
+      }
+      return {
+        ...photo,
+        url,
+      };
+    });
+
+
+    return {
+      photos: photosWithUrl,
+      pagination: {
+        page: validPage,
+        limit: validLimit,
+        total,
+        totalPages,
+      },
+    };
+  }
+
+  /**
+   * Generates a streaming ZIP archive containing all or selected photos of an event.
+   */
+  async generateZipDownload(eventId: number, photoIds?: number[]): Promise<archiver.Archiver> {
+    const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
+    if (!event) {
+      throw new Error('Evento não encontrado para geração de download.');
+    }
+
+    let filterCondition = and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'));
+    if (photoIds && photoIds.length > 0) {
+      filterCondition = and(filterCondition, inArray(photos.id, photoIds));
+    }
+
+    const eventPhotos = await db
+      .select()
+      .from(photos)
+      .where(filterCondition);
+
+    const archive = archiver('zip', {
+      zlib: { level: 6 },
+    });
+
+    archive.on('warning', (err) => {
+      logger.warn('Aviso no empacotamento ZIP:', err);
+    });
+
+    archive.on('error', (err) => {
+      logger.error('Erro na geração do arquivo ZIP:', err);
+      throw err;
+    });
+
+    // Populate the archive asynchronously
+    (async () => {
+      try {
+        const usedNames = new Set<string>();
+
+        for (let i = 0; i < eventPhotos.length; i++) {
+          const photo = eventPhotos[i];
+          let fileName = photo.originalFilename || `foto_${i + 1}.jpg`;
+
+          // Handle duplicate file names in archive
+          if (usedNames.has(fileName)) {
+            const ext = path.extname(fileName);
+            const base = path.basename(fileName, ext);
+            fileName = `${base}_${i + 1}${ext}`;
+          }
+          usedNames.add(fileName);
+
+          if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
+            const fullLocalPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
+            if (fs.existsSync(fullLocalPath)) {
+              archive.file(fullLocalPath, { name: fileName });
+            }
+          } else if (photo.storageProvider === 'google_photos') {
+            try {
+              if (photo.storagePath.startsWith('http')) {
+                const response = await fetch(photo.storagePath);
+                if (response.ok) {
+                  const buffer = Buffer.from(await response.arrayBuffer());
+                  archive.append(buffer, { name: fileName });
+                }
+              }
+            } catch (err) {
+              logger.warn(`Falha ao baixar foto ${photo.id} do Google para ZIP:`, err);
+            }
+          }
+        }
+
+        await archive.finalize();
+      } catch (err) {
+        logger.error('Erro ao finalizar arquivo ZIP:', err);
+        archive.abort();
+      }
+    })();
+
+    return archive;
+  }
+}
+
+export const galleryService = new GalleryService();
+export default galleryService;
