@@ -1,62 +1,55 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import {
-  getGoogleAuthUrl,
-  handleGoogleCallback,
   generateJWT,
+  loginWithPassword,
+  registerWithPassword,
 } from '../services/auth.service.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { authLimiter } from '../middleware/rateLimiter.js';
+import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
-import { logger } from '../utils/logger.js';
 
 const router = Router();
 
-/**
- * GET /api/auth/google
- * Initiates the Google OAuth login flow.
- */
-router.get('/google', (req: Request, res: Response) => {
-  const state = typeof req.query.state === 'string' ? req.query.state : undefined;
-  const authUrl = getGoogleAuthUrl(state);
-  res.redirect(authUrl);
+function setAuthCookie(res: Response, token: string): void {
+  res.cookie('fotoqr_token', token, {
+    httpOnly: true,
+    secure: env.NODE_ENV === 'production',
+    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: '/',
+  });
+}
+
+function serializeUser(user: User) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    avatarUrl: user.avatarUrl,
+    createdAt: user.createdAt,
+  };
+}
+
+router.post('/register', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { name, email, password } = req.body ?? {};
+    const user = await registerWithPassword({ name, email, password });
+    setAuthCookie(res, generateJWT(user));
+    res.status(201).json({ success: true, user: serializeUser(user) });
+  } catch (error) {
+    next(error);
+  }
 });
 
-/**
- * GET /api/auth/google/callback
- * Handles the OAuth code exchange callback from Google.
- */
-router.get('/google/callback', async (req: Request, res: Response, next: NextFunction) => {
-  const code = req.query.code as string;
-  const error = req.query.error as string;
-
-  if (error) {
-    logger.error('Erro retornado na autorização do Google OAuth:', error);
-    res.redirect(`${env.FRONTEND_URL}/login?error=${encodeURIComponent(error)}`);
-    return;
-  }
-
-  if (!code) {
-    res.redirect(`${env.FRONTEND_URL}/login?error=missing_code`);
-    return;
-  }
-
+router.post('/login', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const user = await handleGoogleCallback(code);
-    const token = generateJWT(user);
-
-    // Set secure HTTP-only cookie
-    res.cookie('fotoqr_token', token, {
-      httpOnly: true,
-      secure: env.NODE_ENV === 'production',
-      sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/',
-    });
-
-    // Redirect to frontend dashboard
-    res.redirect(`${env.FRONTEND_URL}/dashboard?login=success`);
-  } catch (err) {
-    logger.error('Erro ao processar callback do Google:', err);
-    res.redirect(`${env.FRONTEND_URL}/login?error=auth_failed`);
+    const { email, password } = req.body ?? {};
+    const user = await loginWithPassword(email, password);
+    setAuthCookie(res, generateJWT(user));
+    res.status(200).json({ success: true, user: serializeUser(user) });
+  } catch (error) {
+    next(error);
   }
 });
 

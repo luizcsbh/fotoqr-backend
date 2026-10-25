@@ -3,17 +3,15 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../config/database.js';
-import { events, photos, Photo, storageProviderEnum } from '../models/schema.js';
-import { googlePhotosService } from './googlePhotos.service.js';
+import { events, photos, Photo } from '../models/schema.js';
 import { localStorageService } from './local.storage.service.js';
-import { refreshAccessToken } from './auth.service.js';
 import { logger } from '../utils/logger.js';
 
 export interface UploadResult {
   id?: number;
   originalFilename: string;
   storedFilename: string;
-  storageProvider: 'google_photos' | 'supabase' | 'local';
+  storageProvider: Photo['storageProvider'];
   storagePath: string;
   publicUrl?: string;
   fileSize: number;
@@ -24,12 +22,12 @@ export interface UploadResult {
 export class PhotoService {
   /**
    * Processes images using Sharp (resize max 2048px, 80 quality, EXIF orientation),
-   * checks for duplicates via SHA-256 hash, and uploads to Google Photos or Fallback storage.
+   * checks for duplicates via SHA-256 hash and stores them using local fallback storage.
    */
   async processAndUpload(
     files: Express.Multer.File[],
     eventId: number,
-    storageMode?: 'google_photos' | 'fallback'
+    _storageMode?: 'fallback'
   ): Promise<UploadResult[]> {
     if (!files || files.length === 0) {
       return [];
@@ -43,32 +41,6 @@ export class PhotoService {
 
     if (!event.isActive) {
       throw new Error('Este evento está inativo no momento e não aceita novos envios.');
-    }
-
-    const effectiveStorageMode = storageMode || event.storageMode;
-    let googleAccessToken: string | null = null;
-    let googleAlbumId: string | null = event.googleAlbumId;
-
-    // If Google Photos mode is requested, attempt to get a valid token
-    if (effectiveStorageMode === 'google_photos') {
-      try {
-        googleAccessToken = await refreshAccessToken(event.userId);
-
-        // If album was not yet created, create it now
-        if (!googleAlbumId && googleAccessToken) {
-          googleAlbumId = await googlePhotosService.createAlbum(event.title, googleAccessToken);
-          await db
-            .update(events)
-            .set({ googleAlbumId, updatedAt: new Date() })
-            .where(eq(events.id, eventId));
-        }
-      } catch (err) {
-        logger.warn(
-          `Falha ao obter credenciais do Google Photos para o evento ${eventId}. Usando fallback.`,
-          err
-        );
-        googleAccessToken = null;
-      }
     }
 
     const results: UploadResult[] = [];
@@ -144,51 +116,23 @@ export class PhotoService {
           })
           .returning();
 
-        // 5. Upload to Google Photos or Fallback
-        let uploadSuccess = false;
-        let finalProvider: 'google_photos' | 'local' | 'supabase' = 'local';
+        // 5. Store the processed image locally
+        let finalProvider: 'local' = 'local';
         let storagePath = '';
         let publicUrl: string | undefined;
 
-        if (effectiveStorageMode === 'google_photos' && googleAccessToken && googleAlbumId) {
-          const googleResult = await googlePhotosService.uploadToAlbum(
-            processedBuffer,
-            storedFilename,
-            googleAlbumId,
-            googleAccessToken,
-            mimeType
-          );
+        const fallbackResult = await localStorageService.uploadPhoto(
+          processedBuffer,
+          storedFilename,
+          mimeType,
+          eventId
+        );
 
-          if (googleResult.success) {
-            uploadSuccess = true;
-            finalProvider = 'google_photos';
-            storagePath = googleResult.storagePath;
-            publicUrl = googleResult.publicUrl;
-          } else {
-            logger.warn(
-              `Google Photos falhou para arquivo ${file.originalname}. Tentando fallback storage.`
-            );
-          }
+        if (!fallbackResult.success) {
+          throw new Error(fallbackResult.error || 'Falha no upload para o armazenamento de contingência.');
         }
-
-        // If Google Photos not active or failed, use local storage
-        if (!uploadSuccess) {
-          const fallbackResult = await localStorageService.uploadPhoto(
-            processedBuffer,
-            storedFilename,
-            mimeType,
-            eventId
-          );
-
-          if (fallbackResult.success) {
-            uploadSuccess = true;
-            finalProvider = fallbackResult.provider;
-            storagePath = fallbackResult.storagePath;
-            publicUrl = fallbackResult.publicUrl;
-          } else {
-            throw new Error(fallbackResult.error || 'Falha no upload para o armazenamento de contingência.');
-          }
-        }
+        storagePath = fallbackResult.storagePath;
+        publicUrl = fallbackResult.publicUrl;
 
         // 6. Update photo status in DB
         await db

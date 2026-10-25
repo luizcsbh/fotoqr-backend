@@ -57,8 +57,6 @@ export class GalleryService {
       let url = '';
       if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
         url = localStorageService.getPhotoUrl(photo.storagePath);
-      } else if (photo.storageProvider === 'google_photos') {
-        url = photo.storagePath.startsWith('http') ? photo.storagePath : `/api/photos/${photo.id}/preview`;
       }
       return {
         ...photo,
@@ -131,18 +129,6 @@ export class GalleryService {
             const fullLocalPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
             if (fs.existsSync(fullLocalPath)) {
               archive.file(fullLocalPath, { name: fileName });
-            }
-          } else if (photo.storageProvider === 'google_photos') {
-            try {
-              if (photo.storagePath.startsWith('http')) {
-                const response = await fetch(photo.storagePath);
-                if (response.ok) {
-                  const buffer = Buffer.from(await response.arrayBuffer());
-                  archive.append(buffer, { name: fileName });
-                }
-              }
-            } catch (err) {
-              logger.warn(`Falha ao baixar foto ${photo.id} do Google para ZIP:`, err);
             }
           }
         }

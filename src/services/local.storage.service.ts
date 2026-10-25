@@ -6,7 +6,7 @@ import { env } from '../config/env.js';
 export interface StorageResult {
   success: boolean;
   storagePath: string;
-  provider: 'google_photos' | 'local' | 'supabase';
+  provider: 'local';
   publicUrl?: string;
   error?: string;
 }

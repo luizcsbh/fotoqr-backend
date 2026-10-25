@@ -1,56 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { encryptToken, decryptToken } from '../src/utils/encryption.js';
-import { generateJWT, verifyJWT, getGoogleAuthUrl } from '../src/services/auth.service.js';
+import {
+  generateJWT,
+  verifyJWT,
+  loginWithPassword,
+  registerWithPassword,
+} from '../src/services/auth.service.js';
 import { sanitizeLog } from '../src/utils/logger.js';
 
-describe('Authentication & Encryption Tests', () => {
-  describe('AES-256-GCM Encryption / Decryption', () => {
-    it('should encrypt and decrypt a sensitive token accurately', () => {
-      const originalToken = 'ya29.a0AfH6SMB_secret_google_refresh_token_123456';
-      const encrypted = encryptToken(originalToken);
-
-      expect(encrypted).toBeDefined();
-      expect(encrypted).not.toBe(originalToken);
-
-      // Verify format iv:authTag:encrypted
-      const parts = encrypted.split(':');
-      expect(parts).toHaveLength(3);
-
-      const decrypted = decryptToken(encrypted);
-      expect(decrypted).toBe(originalToken);
-    });
-
-    it('should generate distinct ciphertexts for identical plaintext due to random IVs', () => {
-      const plaintext = 'sample-access-token';
-      const cipher1 = encryptToken(plaintext);
-      const cipher2 = encryptToken(plaintext);
-
-      expect(cipher1).not.toBe(cipher2);
-      expect(decryptToken(cipher1)).toBe(plaintext);
-      expect(decryptToken(cipher2)).toBe(plaintext);
-    });
-
-    it('should throw an error when attempting to decrypt tampered ciphertext or tags', () => {
-      const encrypted = encryptToken('important-secret');
-      const parts = encrypted.split(':');
-      // Tamper with the ciphertext
-      const tampered = `${parts[0]}:${parts[1]}:bad0${parts[2].slice(4)}`;
-
-      expect(() => decryptToken(tampered)).toThrow();
-    });
-
-    it('should throw an error for malformed encrypted string', () => {
-      expect(() => decryptToken('invalid:format')).toThrow();
-      expect(() => decryptToken('')).toThrow();
-    });
-  });
-
+describe('Authentication Tests', () => {
   describe('JWT Token Generation and Verification', () => {
     const mockUser = {
       id: 42,
       email: 'organizador@evento.com',
       name: 'Carlos Silva',
-      avatarUrl: 'https://lh3.googleusercontent.com/photo.jpg',
+      avatarUrl: null,
     };
 
     it('should generate and verify JWT token successfully', () => {
@@ -71,13 +34,27 @@ describe('Authentication & Encryption Tests', () => {
     });
   });
 
-  describe('Google OAuth URL', () => {
-    it('should generate an OAuth URL containing required parameters', () => {
-      const url = getGoogleAuthUrl('random-csrf-state');
-      expect(url).toContain('accounts.google.com');
-      expect(url).toContain('access_type=offline');
-      expect(url).toContain('prompt=consent');
-      expect(url).toContain('state=random-csrf-state');
+  describe('E-mail and password validation', () => {
+    it('should reject malformed e-mails before accessing the database', async () => {
+      await expect(
+        registerWithPassword({ name: 'Ana Silva', email: 'invalid', password: 'senha-segura' })
+      ).rejects.toMatchObject({ statusCode: 400 });
+    });
+
+    it('should reject passwords shorter than 8 characters', async () => {
+      await expect(loginWithPassword('ana@example.com', '1234567')).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    });
+
+    it('should reject passwords longer than bcrypt supports', async () => {
+      await expect(
+        registerWithPassword({
+          name: 'Ana Silva',
+          email: 'ana@example.com',
+          password: 'a'.repeat(73),
+        })
+      ).rejects.toMatchObject({ statusCode: 400 });
     });
   });
 

@@ -65,7 +65,7 @@ describe('Validators & Utilities', () => {
         title: 'Casamento Mariana e Felipe',
         description: 'Compartilhe suas melhores fotos deste dia especial!',
         eventDate: '2026-11-20T18:00:00Z',
-        storageMode: 'google_photos',
+        storageMode: 'fallback',
       });
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);

@@ -4,8 +4,6 @@ import { db } from '../config/database.js';
 import { events, photos, Event, NewEvent, Photo } from '../models/schema.js';
 import { validateEventInput } from '../utils/validators.js';
 import { generateQRCode } from '../utils/qrcode.js';
-import { refreshAccessToken } from './auth.service.js';
-import { googlePhotosService } from './googlePhotos.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
@@ -17,7 +15,7 @@ export interface CreateEventDTO {
   start_date?: string | Date;
   endDate?: string | Date;
   end_date?: string | Date;
-  storageMode?: 'google_photos' | 'fallback';
+  storageMode?: 'fallback';
 }
 
 export interface EventWithQR extends Event {
@@ -48,20 +46,7 @@ export class EventService {
     }
 
     const uuid = uuidv4();
-    const storageMode = data.storageMode || 'google_photos';
-    let googleAlbumId: string | null = null;
-
-    // If Google Photos mode is selected, attempt to create the album immediately
-    if (storageMode === 'google_photos') {
-      try {
-        const accessToken = await refreshAccessToken(userId);
-        if (accessToken) {
-          googleAlbumId = await googlePhotosService.createAlbum(data.title.trim(), accessToken);
-        }
-      } catch (err) {
-        logger.warn('Não foi possível criar o álbum no Google Photos no momento da criação do evento. Criará sob demanda.', err);
-      }
-    }
+    const storageMode = 'fallback';
 
     const rawStart = data.startDate || data.start_date || data.eventDate;
     const rawEnd = data.endDate || data.end_date;
@@ -80,7 +65,6 @@ export class EventService {
         startDate,
         endDate,
         storageMode,
-        googleAlbumId,
         isActive: true,
         photoCount: 0,
       })

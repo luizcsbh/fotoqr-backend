@@ -29,3 +29,14 @@ export const apiLimiter = rateLimit({
     error: 'Muitas requisições originadas deste IP. Por favor, tente novamente mais tarde.',
   },
 });
+
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Muitas tentativas de autenticação. Aguarde alguns minutos e tente novamente.',
+  },
+});

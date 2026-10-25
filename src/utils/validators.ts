@@ -150,11 +150,11 @@ export function validateEventInput(data: any): ValidationResult {
     errors.push('A data/hora de término não pode ser anterior à data/hora de início.');
   }
 
-  // Storage mode validation (optional, defaults to 'google_photos')
+  // Storage mode validation (optional, defaults to local fallback storage)
   const storageMode = data.storageMode || data.storage_mode;
   if (storageMode !== undefined && storageMode !== null) {
-    if (!['google_photos', 'fallback'].includes(storageMode)) {
-      errors.push('Modo de armazenamento inválido. Deve ser "google_photos" ou "fallback".');
+    if (storageMode !== 'fallback') {
+      errors.push('Modo de armazenamento inválido. Deve ser "fallback".');
     }
   }
 
