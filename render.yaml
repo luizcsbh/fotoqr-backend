@@ -23,10 +23,6 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
-      - key: RESEND_API_KEY
-        sync: false
-      - key: PASSWORD_RESET_FROM_EMAIL
-        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: MAX_FILE_SIZE_MB

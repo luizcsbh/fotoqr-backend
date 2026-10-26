@@ -10,8 +10,6 @@ export interface EnvConfig {
   CORS_ALLOWED_ORIGINS: string[];
   BACKEND_PUBLIC_URL: string;
   DATABASE_URL: string;
-  RESEND_API_KEY: string;
-  PASSWORD_RESET_FROM_EMAIL: string;
   SESSION_SECRET: string;
   JWT_SECRET: string;
   MAX_FILE_SIZE_MB: number;
@@ -34,8 +32,6 @@ export const env: EnvConfig = {
     .map((origin) => origin.trim())
     .filter(Boolean),
   BACKEND_PUBLIC_URL: process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001',
-  RESEND_API_KEY: process.env.RESEND_API_KEY || '',
-  PASSWORD_RESET_FROM_EMAIL: process.env.PASSWORD_RESET_FROM_EMAIL || '',
   DATABASE_URL: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/fotoqr',
   SESSION_SECRET: process.env.SESSION_SECRET || 'dev-session-secret-at-least-32-chars-long-123456',
   JWT_SECRET: process.env.JWT_SECRET || process.env.SESSION_SECRET || 'dev-jwt-secret-at-least-32-chars-long-123456',

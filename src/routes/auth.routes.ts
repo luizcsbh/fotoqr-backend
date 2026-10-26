@@ -7,8 +7,6 @@ import {
   updateProfile,
   changePassword,
   updateAvatar,
-  requestPasswordReset,
-  resetPasswordWithToken,
 } from '../services/auth.service.js';
 import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
@@ -65,27 +63,6 @@ router.post('/login', authLimiter, async (req: Request, res: Response, next: Nex
     const user = await loginWithPassword(email, password);
     setAuthCookie(res, generateJWT(user));
     res.status(200).json({ success: true, user: serializeUser(user) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/forgot-password', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    await requestPasswordReset(req.body?.email);
-    res.status(200).json({
-      success: true,
-      message: 'Se houver uma conta com esse e-mail, enviaremos um link de recuperação.',
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/reset-password', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    await resetPasswordWithToken(req.body?.token, req.body?.newPassword);
-    res.status(200).json({ success: true, message: 'Senha redefinida. Você já pode entrar com a nova senha.' });
   } catch (error) {
     next(error);
   }
