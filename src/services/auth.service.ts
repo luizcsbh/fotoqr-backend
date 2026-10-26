@@ -184,7 +184,7 @@ export async function updateAvatar(userId: number, image: Buffer): Promise<User>
   }
 
   try {
-    const avatarUrl = `${env.BACKEND_PUBLIC_URL}/uploads/avatars/${filename}`;
+    const avatarUrl = new URL(`/uploads/avatars/${filename}`, env.BACKEND_PUBLIC_URL).toString();
     const [previousUser] = await db.select({ avatarUrl: users.avatarUrl }).from(users)
       .where(eq(users.id, userId)).limit(1);
     const [user] = await db

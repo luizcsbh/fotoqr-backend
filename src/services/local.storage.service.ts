@@ -48,7 +48,7 @@ export class LocalStorageService {
       fs.writeFileSync(fullPath, file);
 
       const storagePath = `event_${eventId}/${filename}`;
-      const publicUrl = `${env.BACKEND_PUBLIC_URL}/uploads/${storagePath}`;
+      const publicUrl = new URL(`/uploads/${storagePath}`, env.BACKEND_PUBLIC_URL).toString();
 
       return {
         success: true,
