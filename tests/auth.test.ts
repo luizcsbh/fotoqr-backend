@@ -7,6 +7,8 @@ import {
   verifyJWT,
   loginWithPassword,
   registerWithPassword,
+  requestPasswordReset,
+  resetPasswordWithToken,
 } from '../src/services/auth.service.js';
 import { sanitizeLog } from '../src/utils/logger.js';
 
@@ -66,6 +68,22 @@ describe('Authentication Tests', () => {
       expect(profileResponse.status).toBe(401);
       expect(passwordResponse.status).toBe(401);
       expect(avatarResponse.status).toBe(401);
+    });
+
+    it('POST /api/auth/forgot-password should validate e-mail without revealing account state', async () => {
+      const response = await request(createApp()).post('/api/auth/forgot-password').send({ email: 'invalid' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('e-mail válido');
+    });
+
+    it('POST /api/auth/reset-password should reject malformed tokens', async () => {
+      const response = await request(createApp())
+        .post('/api/auth/reset-password')
+        .send({ token: 'invalid', newPassword: 'nova-senha-segura' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('link de recuperação');
     });
   });
 
@@ -147,6 +165,16 @@ describe('Authentication Tests', () => {
     it('should redact authorization headers starting with Bearer', () => {
       const authHeader = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.sensitive';
       expect(sanitizeLog(authHeader)).toBe('Bearer [REDACTED]');
+    });
+  });
+
+  it('should reject malformed recovery e-mails before database access', async () => {
+    await expect(requestPasswordReset('invalid')).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('should reject malformed recovery tokens before database access', async () => {
+    await expect(resetPasswordWithToken('invalid', 'senha-segura-123')).rejects.toMatchObject({
+      statusCode: 400,
     });
   });
 });

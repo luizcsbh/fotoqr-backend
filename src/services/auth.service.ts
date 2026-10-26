@@ -1,12 +1,12 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { and, eq, sql } from 'drizzle-orm';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { db } from '../config/database.js';
-import { users, User } from '../models/schema.js';
+import { passwordResetTokens, users, User } from '../models/schema.js';
 import { env } from '../config/env.js';
 import { AuthUser } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
@@ -26,6 +26,17 @@ export class AuthServiceError extends Error {
 
 const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
+function validateEmail(email: unknown): asserts email is string {
+  if (
+    typeof email !== 'string' ||
+    !email.trim() ||
+    email.trim().length > 255 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  ) {
+    throw new AuthServiceError('Informe um e-mail válido.', 400);
+  }
+}
+
 function validatePassword(password: string): void {
   if (
     typeof password !== 'string' ||
@@ -37,15 +48,7 @@ function validatePassword(password: string): void {
 }
 
 function validateEmailAndPassword(email: string, password: string): void {
-  if (
-    typeof email !== 'string' ||
-    !email ||
-    email.length > 255 ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  ) {
-    throw new AuthServiceError('Informe um e-mail válido.', 400);
-  }
-
+  validateEmail(email);
   validatePassword(password);
 }
 
@@ -114,6 +117,89 @@ export async function loginWithPassword(email: string, password: string): Promis
   }
 
   return user;
+}
+
+export async function requestPasswordReset(email: unknown): Promise<void> {
+  validateEmail(email);
+  if (!env.RESEND_API_KEY || !env.PASSWORD_RESET_FROM_EMAIL) {
+    throw new AuthServiceError('A recuperação de senha ainda não está configurada. Tente novamente mais tarde.', 503);
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+  const [user] = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(and(sql`lower(${users.email}) = ${normalizedEmail}`, sql`${users.passwordHash} IS NOT NULL`))
+    .limit(1);
+
+  if (!user) return;
+
+  const token = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+  await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, user.id));
+  await db.insert(passwordResetTokens).values({ userId: user.id, tokenHash, expiresAt });
+
+  const resetUrl = new URL('/reset-password', env.FRONTEND_URL);
+  resetUrl.searchParams.set('token', token);
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: env.PASSWORD_RESET_FROM_EMAIL,
+        to: [user.email],
+        subject: 'Redefina sua senha do FotoQR',
+        text: `Recebemos um pedido para redefinir sua senha do FotoQR. Acesse este link em até 30 minutos: ${resetUrl.toString()}\n\nSe você não solicitou, ignore este e-mail.`,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`O Resend respondeu com status ${response.status}.`);
+    }
+  } catch (error) {
+    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.tokenHash, tokenHash)).catch((cleanupError) => {
+      logger.error('Falha ao remover token de recuperação após erro no envio.', cleanupError);
+    });
+    logger.error('Falha ao enviar e-mail de recuperação de senha.', error, { userId: user.id });
+  }
+}
+
+export async function resetPasswordWithToken(token: unknown, newPassword: string): Promise<void> {
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+    throw new AuthServiceError('O link de recuperação é inválido ou expirou.', 400);
+  }
+  validatePassword(newPassword);
+
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await db.transaction(async (tx) => {
+    const [resetToken] = await tx
+      .delete(passwordResetTokens)
+      .where(and(
+        eq(passwordResetTokens.tokenHash, tokenHash),
+        gt(passwordResetTokens.expiresAt, new Date())
+      ))
+      .returning({ userId: passwordResetTokens.userId });
+
+    if (!resetToken) {
+      throw new AuthServiceError('O link de recuperação é inválido ou expirou.', 400);
+    }
+
+    const [user] = await tx
+      .update(users)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(users.id, resetToken.userId))
+      .returning({ id: users.id });
+
+    if (!user) throw new AuthServiceError('O link de recuperação é inválido ou expirou.', 400);
+  });
 }
 
 export async function updateProfile(userId: number, name: string): Promise<User> {
