@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "reset-password": "tsx src/scripts/reset-password.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "drizzle-kit push"
