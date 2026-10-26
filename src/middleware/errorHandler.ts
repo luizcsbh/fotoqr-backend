@@ -30,7 +30,9 @@ export function errorHandler(
     if (err.code === 'LIMIT_FILE_SIZE') {
       res.status(400).json({
         success: false,
-        error: `O arquivo excede o limite máximo permitido de ${env.MAX_FILE_SIZE_MB}MB.`,
+        error: req.path.endsWith('/profile/avatar')
+          ? 'A imagem do avatar deve ter no máximo 5MB.'
+          : `O arquivo excede o limite máximo permitido de ${env.MAX_FILE_SIZE_MB}MB.`,
       });
       return;
     }

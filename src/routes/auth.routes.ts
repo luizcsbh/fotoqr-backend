@@ -1,8 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import {
   generateJWT,
   loginWithPassword,
   registerWithPassword,
+  updateProfile,
+  changePassword,
+  updateAvatar,
 } from '../services/auth.service.js';
 import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
@@ -10,6 +14,17 @@ import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
 
 const router = Router();
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Formato de arquivo inválido. Use uma imagem JPG, PNG ou WEBP.'));
+  },
+});
 
 function setAuthCookie(res: Response, token: string): void {
   res.cookie('fotoqr_token', token, {
@@ -63,6 +78,44 @@ router.get('/me', optionalAuth, (req: Request, res: Response) => {
     user: req.user ?? null,
   });
 });
+
+router.patch('/profile', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await updateProfile(req.user!.id, req.body?.name);
+    setAuthCookie(res, generateJWT(user));
+    res.status(200).json({ success: true, user: serializeUser(user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/profile/password', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await changePassword(req.user!.id, req.body?.currentPassword, req.body?.newPassword);
+    res.status(200).json({ success: true, message: 'Senha alterada com sucesso.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  '/profile/avatar',
+  authenticateToken,
+  avatarUpload.single('avatar'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ success: false, error: 'Selecione uma imagem para o avatar.' });
+        return;
+      }
+      const user = await updateAvatar(req.user!.id, req.file.buffer);
+      setAuthCookie(res, generateJWT(user));
+      res.status(200).json({ success: true, user: serializeUser(user) });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 /**
  * POST /api/auth/logout

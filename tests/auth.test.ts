@@ -52,6 +52,21 @@ describe('Authentication Tests', () => {
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('e-mail válido');
     });
+
+    it('profile update, password change, and avatar upload require authentication', async () => {
+      const app = createApp();
+      const profileResponse = await request(app).patch('/api/auth/profile').send({ name: 'Ana Silva' });
+      const passwordResponse = await request(app)
+        .put('/api/auth/profile/password')
+        .send({ currentPassword: 'old-password', newPassword: 'new-password' });
+      const avatarResponse = await request(app)
+        .post('/api/auth/profile/avatar')
+        .attach('avatar', Buffer.from('image'), { filename: 'avatar.png', contentType: 'image/png' });
+
+      expect(profileResponse.status).toBe(401);
+      expect(passwordResponse.status).toBe(401);
+      expect(avatarResponse.status).toBe(401);
+    });
   });
 
   describe('JWT Token Generation and Verification', () => {
