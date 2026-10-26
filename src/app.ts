@@ -31,20 +31,31 @@ export const createApp = (): Express => {
   );
 
   // CORS Configuration
-  const allowedOrigins = [
-    env.FRONTEND_URL,
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'https://fotoqreventos.netlify.app/',
-  ];
+  const allowedOrigins = new Set(
+    [env.FRONTEND_URL, ...env.CORS_ALLOWED_ORIGINS]
+      .map((allowedOrigin) => {
+        try {
+          return new URL(allowedOrigin).origin;
+        } catch {
+          return null;
+        }
+      })
+      .filter((origin): origin is string => origin !== null)
+  );
 
   app.use(
     cors({
       origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin) || env.NODE_ENV === 'development') {
+        let requestOrigin: string;
+        try {
+          requestOrigin = new URL(origin).origin;
+        } catch {
+          return callback(new Error('Origem inválida pela política de CORS.'));
+        }
+
+        if (allowedOrigins.has(requestOrigin) || env.NODE_ENV === 'development') {
           return callback(null, true);
         }
         return callback(new Error('Origem não permitida pela política de CORS.'));

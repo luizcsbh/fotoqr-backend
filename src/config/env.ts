@@ -7,6 +7,7 @@ export interface EnvConfig {
   NODE_ENV: 'development' | 'production' | 'test';
   PORT: number;
   FRONTEND_URL: string;
+  CORS_ALLOWED_ORIGINS: string[];
   BACKEND_PUBLIC_URL: string;
   DATABASE_URL: string;
   SESSION_SECRET: string;
@@ -26,6 +27,10 @@ export const env: EnvConfig = {
   NODE_ENV: (process.env.NODE_ENV as EnvConfig['NODE_ENV']) || 'development',
   PORT: parseNumber(process.env.PORT, 3001),
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
+  CORS_ALLOWED_ORIGINS: (process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   BACKEND_PUBLIC_URL: process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001',
   DATABASE_URL: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/fotoqr',
   SESSION_SECRET: process.env.SESSION_SECRET || 'dev-session-secret-at-least-32-chars-long-123456',

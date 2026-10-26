@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
+import { env } from '../src/config/env.js';
 import {
   generateJWT,
   verifyJWT,
@@ -11,6 +12,26 @@ import { sanitizeLog } from '../src/utils/logger.js';
 
 describe('Authentication Tests', () => {
   describe('Authentication Routes', () => {
+    it('should allow the configured Netlify origin on the health preflight', async () => {
+      const configuredOrigin = 'https://fotoqreventos.netlify.app/';
+      env.CORS_ALLOWED_ORIGINS.push(configuredOrigin);
+
+      try {
+        const response = await request(createApp())
+          .options('/api/health')
+          .set('Origin', 'https://fotoqreventos.netlify.app');
+
+        expect(response.status).toBe(204);
+        expect(response.headers['access-control-allow-origin']).toBe(
+          'https://fotoqreventos.netlify.app'
+        );
+        expect(response.headers['access-control-allow-credentials']).toBe('true');
+        expect(response.headers['access-control-allow-methods']).toContain('GET');
+      } finally {
+        env.CORS_ALLOWED_ORIGINS.splice(env.CORS_ALLOWED_ORIGINS.indexOf(configuredOrigin), 1);
+      }
+    });
+
     it('GET /api/auth/me should return an unauthenticated state without an error', async () => {
       const response = await request(createApp()).get('/api/auth/me');
 
