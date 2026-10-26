@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import request from 'supertest';
+import { createApp } from '../src/app.js';
 import {
   generateJWT,
   verifyJWT,
@@ -8,6 +10,29 @@ import {
 import { sanitizeLog } from '../src/utils/logger.js';
 
 describe('Authentication Tests', () => {
+  describe('Authentication Routes', () => {
+    it('GET /api/auth/me should return an unauthenticated state without an error', async () => {
+      const response = await request(createApp()).get('/api/auth/me');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ success: true, user: null });
+    });
+
+    it('POST /api/auth/register should be registered and validate the request', async () => {
+      const response = await request(createApp()).post('/api/auth/register').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('e-mail válido');
+    });
+
+    it('POST /api/auth/login should be registered and validate the request', async () => {
+      const response = await request(createApp()).post('/api/auth/login').send({});
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('e-mail válido');
+    });
+  });
+
   describe('JWT Token Generation and Verification', () => {
     const mockUser = {
       id: 42,

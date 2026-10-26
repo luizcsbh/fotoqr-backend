@@ -4,7 +4,7 @@ import {
   loginWithPassword,
   registerWithPassword,
 } from '../services/auth.service.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
@@ -57,10 +57,10 @@ router.post('/login', authLimiter, async (req: Request, res: Response, next: Nex
  * GET /api/auth/me
  * Retrieves the currently authenticated user's profile.
  */
-router.get('/me', authenticateToken, (req: Request, res: Response) => {
+router.get('/me', optionalAuth, (req: Request, res: Response) => {
   res.status(200).json({
     success: true,
-    user: req.user,
+    user: req.user ?? null,
   });
 });
 
