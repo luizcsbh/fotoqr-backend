@@ -26,7 +26,7 @@ const parseNumber = (val: string | undefined, defaultVal: number): number => {
 export const env: EnvConfig = {
   NODE_ENV: (process.env.NODE_ENV as EnvConfig['NODE_ENV']) || 'development',
   PORT: parseNumber(process.env.PORT, 3001),
-  FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
+  FRONTEND_URL: (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, ''),
   CORS_ALLOWED_ORIGINS: (process.env.CORS_ALLOWED_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
@@ -37,7 +37,7 @@ export const env: EnvConfig = {
   JWT_SECRET: process.env.JWT_SECRET || process.env.SESSION_SECRET || 'dev-jwt-secret-at-least-32-chars-long-123456',
   MAX_FILE_SIZE_MB: parseNumber(process.env.MAX_FILE_SIZE_MB, 10),
   MAX_FILES_PER_UPLOAD: parseNumber(process.env.MAX_FILES_PER_UPLOAD, 20),
-  MAX_UPLOADS_PER_MINUTE: parseNumber(process.env.MAX_UPLOADS_PER_MINUTE, 10),
+  MAX_UPLOADS_PER_MINUTE: parseNumber(process.env.MAX_UPLOADS_PER_MINUTE, 60),
 };
 
 export default env;

@@ -109,7 +109,7 @@ export async function loginWithPassword(email: string, password: string): Promis
   const [user] = await db
     .select()
     .from(users)
-    .where(and(eq(users.email, normalizedEmail), sql`${users.passwordHash} IS NOT NULL`))
+    .where(and(sql`lower(${users.email}) = ${normalizedEmail}`, sql`${users.passwordHash} IS NOT NULL`))
     .limit(1);
 
   if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {

@@ -8,7 +8,7 @@ import { eventService } from '../services/event.service.js';
 import { localStorageService } from '../services/local.storage.service.js';
 import { uploadMiddleware } from '../middleware/upload.js';
 import { uploadLimiter } from '../middleware/rateLimiter.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
@@ -78,13 +78,13 @@ router.post(
  * GET /api/events/:idOrUuid/photos
  * Returns paginated photos for an event (accepts ID or UUID).
  */
-router.get('/events/:idOrUuid/photos', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = req.params.idOrUuid as string;
     const page = parseInt(req.query.page as string, 10) || 1;
     const limit = parseInt(req.query.limit as string, 10) || 20;
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id);
     if (!event) {
       res.status(404).json({
         success: false,
@@ -131,7 +131,7 @@ router.get('/events/:uuid/gallery', async (req: Request, res: Response, next: Ne
     const page = parseInt(req.query.page as string, 10) || 1;
     const limit = parseInt(req.query.limit as string, 10) || 24;
 
-    const event = await eventService.getEventByIdOrUuid(uuid);
+    const event = await eventService.getEventByUuid(uuid);
     if (!event) {
       res.status(404).json({
         success: false,
@@ -187,7 +187,7 @@ router.get('/events/:uuid/gallery', async (req: Request, res: Response, next: Ne
 const handleZipDownload = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = (req.params.idOrUuid || req.params.id) as string;
-    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id);
     if (!event) {
       res.status(404).json({
         success: false,
@@ -208,17 +208,27 @@ const handleZipDownload = async (req: Request, res: Response, next: NextFunction
     const suffix = photoIds && photoIds.length > 0 ? `_selecionadas_${photoIds.length}` : '_todas';
     const filename = `fotoqr_${sanitizedTitle}${suffix}.zip`;
 
+    const archive = await galleryService.generateZipDownload(event.id, photoIds);
+
+    // Headers are only set once the archive exists, so earlier failures still reach the JSON error handler
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    const archive = await galleryService.generateZipDownload(event.id, photoIds);
+    archive.on('error', (err) => {
+      logger.error('Erro durante o streaming do arquivo ZIP:', err);
+      res.destroy(err);
+    });
+    // Stop compressing if the client gives up on the download
+    res.on('close', () => {
+      if (!res.writableFinished) archive.abort();
+    });
     archive.pipe(res);
   } catch (error) {
     next(error);
   }
 };
 
-router.get('/events/:idOrUuid/download', handleZipDownload);
+router.get('/events/:idOrUuid/download', optionalAuth, handleZipDownload);
 router.get('/events/:id/photos/download', authenticateToken, handleZipDownload);
 
 /**

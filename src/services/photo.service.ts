@@ -47,6 +47,11 @@ export class PhotoService {
     let successfullyAddedCount = 0;
 
     for (const file of files) {
+      // Multer decodes multipart filenames as latin1; restore UTF-8 names (e.g. "formatura_três.jpg")
+      // and keep them within the varchar(255) column.
+      const originalFilename = Buffer.from(file.originalname, 'latin1').toString('utf8').slice(0, 255);
+      let photoRecordId: number | undefined;
+
       try {
         // 2. Image Optimization using Sharp
         const sharpInstance = sharp(file.buffer).rotate(); // Auto-rotate based on EXIF
@@ -86,10 +91,10 @@ export class PhotoService {
           .limit(1);
 
         if (existingPhoto.length > 0) {
-          logger.info(`Foto duplicada detectada e ignorada: ${file.originalname}`);
+          logger.info(`Foto duplicada detectada e ignorada: ${originalFilename}`);
           results.push({
             id: existingPhoto[0].id,
-            originalFilename: file.originalname,
+            originalFilename,
             storedFilename: existingPhoto[0].storedFilename,
             storageProvider: existingPhoto[0].storageProvider,
             storagePath: existingPhoto[0].storagePath,
@@ -105,7 +110,7 @@ export class PhotoService {
           .insert(photos)
           .values({
             eventId,
-            originalFilename: file.originalname,
+            originalFilename,
             storedFilename,
             storagePath: 'pending',
             storageProvider: 'local',
@@ -115,6 +120,7 @@ export class PhotoService {
             uploadStatus: 'pending',
           })
           .returning();
+        photoRecordId = photoRecord.id;
 
         // 5. Store the processed image locally
         let finalProvider: 'local' = 'local';
@@ -148,7 +154,7 @@ export class PhotoService {
 
         results.push({
           id: photoRecord.id,
-          originalFilename: file.originalname,
+          originalFilename,
           storedFilename,
           storageProvider: finalProvider,
           storagePath,
@@ -157,15 +163,29 @@ export class PhotoService {
           status: 'success',
         });
       } catch (fileError) {
-        logger.error(`Erro ao processar foto ${file.originalname}:`, fileError);
+        logger.error(`Erro ao processar foto ${originalFilename}:`, fileError);
+        const rawMessage = fileError instanceof Error ? fileError.message : '';
+        const errorMessage = /unsupported image format|bad seek|heif/i.test(rawMessage)
+          ? 'Formato de imagem não suportado pelo servidor. Envie a foto em JPEG ou PNG.'
+          : rawMessage || 'Erro ao processar imagem';
+
+        // Do not leave the record stuck as 'pending' when storage fails after insertion
+        if (photoRecordId !== undefined) {
+          await db
+            .update(photos)
+            .set({ uploadStatus: 'failed', errorMessage })
+            .where(eq(photos.id, photoRecordId))
+            .catch((dbError) => logger.error('Não foi possível marcar a foto como falha:', dbError));
+        }
+
         results.push({
-          originalFilename: file.originalname,
+          originalFilename,
           storedFilename: '',
           storageProvider: 'local',
           storagePath: '',
           fileSize: file.size,
           status: 'failed',
-          error: fileError instanceof Error ? fileError.message : 'Erro ao processar imagem',
+          error: errorMessage,
         });
       }
     }

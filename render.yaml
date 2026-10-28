@@ -30,4 +30,4 @@ services:
       - key: MAX_FILES_PER_UPLOAD
         value: "20"
       - key: MAX_UPLOADS_PER_MINUTE
-        value: "10"
+        value: "60"

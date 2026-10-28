@@ -6,6 +6,7 @@ import { validateEventInput } from '../utils/validators.js';
 import { generateQRCode } from '../utils/qrcode.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { localStorageService } from './local.storage.service.js';
 
 export interface CreateEventDTO {
   title: string;
@@ -84,28 +85,38 @@ export class EventService {
 
   /**
    * Retrieves an event by its public UUID or numeric ID.
+   * Numeric IDs are sequential and guessable, so they only resolve for the event owner;
+   * anonymous access must use the public UUID.
    */
-  async getEventByIdOrUuid(identifier: string | number): Promise<EventWithQR | null> {
+  async getEventByIdOrUuid(identifier: string | number, userId?: number): Promise<EventWithQR | null> {
     const trimmed = String(identifier).trim();
-    const isNumeric = /^\d+$/.test(trimmed);
 
-    let [event] = isNumeric
-      ? await db.select().from(events).where(eq(events.id, Number(trimmed))).limit(1)
-      : await db.select().from(events).where(eq(events.uuid, trimmed)).limit(1);
-
-    if (!event) {
-      // Fallback: try the other field just in case
-      [event] = await db
-        .select()
-        .from(events)
-        .where(isNumeric ? eq(events.uuid, trimmed) : eq(events.id, Number(trimmed) || -1))
-        .limit(1);
+    if (!/^\d+$/.test(trimmed)) {
+      return this.getEventByUuid(trimmed);
     }
 
-    if (!event) {
+    if (!userId) {
       return null;
     }
 
+    const [event] = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.id, Number(trimmed)), eq(events.userId, userId)))
+      .limit(1);
+
+    return event ? this.withQRCode(event) : null;
+  }
+
+  /**
+   * Retrieves an event by its public UUID.
+   */
+  async getEventByUuid(uuid: string): Promise<EventWithQR | null> {
+    const [event] = await db.select().from(events).where(eq(events.uuid, uuid.trim())).limit(1);
+    return event ? this.withQRCode(event) : null;
+  }
+
+  private async withQRCode(event: Event): Promise<EventWithQR> {
     const publicUrl = `${env.FRONTEND_URL}/e/${event.uuid}`;
     const qrCodeUrl = await generateQRCode(publicUrl);
 
@@ -114,13 +125,6 @@ export class EventService {
       publicUrl,
       qrCodeUrl,
     };
-  }
-
-  /**
-   * Retrieves an event by its public UUID.
-   */
-  async getEventByUuid(uuid: string): Promise<EventWithQR | null> {
-    return this.getEventByIdOrUuid(uuid);
   }
 
   /**
@@ -190,6 +194,7 @@ export class EventService {
     }
 
     await db.delete(events).where(eq(events.id, eventId));
+    await localStorageService.deleteEventFolder(eventId);
     logger.info(`Evento ${eventId} excluído com sucesso pelo usuário ID ${userId}`);
   }
 

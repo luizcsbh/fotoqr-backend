@@ -103,9 +103,10 @@ export class GalleryService {
       logger.warn('Aviso no empacotamento ZIP:', err);
     });
 
+    // Throwing inside an emitter listener would crash the process; the route listens for
+    // 'error' and closes the response instead.
     archive.on('error', (err) => {
       logger.error('Erro na geração do arquivo ZIP:', err);
-      throw err;
     });
 
     // Populate the archive asynchronously

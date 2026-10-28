@@ -82,6 +82,17 @@ export class LocalStorageService {
   }
 
   /**
+   * Deletes the whole `uploads/event_<eventId>/` folder of a removed event.
+   */
+  async deleteEventFolder(eventId: number): Promise<void> {
+    try {
+      await fs.promises.rm(path.join(this.uploadDir, `event_${eventId}`), { recursive: true, force: true });
+    } catch (error) {
+      logger.error('Erro ao excluir pasta de fotos do evento:', error);
+    }
+  }
+
+  /**
    * Returns the public URL for accessing a locally stored photo.
    */
   getPhotoUrl(storagePath: string): string {

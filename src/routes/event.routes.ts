@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { eventService } from '../services/event.service.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -45,10 +45,10 @@ router.get('/', authenticateToken, async (req: Request, res: Response, next: Nex
  * GET /api/events/:idOrUuid
  * Fetches event information by numeric ID or UUID.
  */
-router.get('/:idOrUuid', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = req.params.idOrUuid as string;
-    const event = await eventService.getEventByUuid(idOrUuid);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id);
 
     if (!event) {
       res.status(404).json({
@@ -93,7 +93,7 @@ router.patch('/:id/toggle', authenticateToken, async (req: Request, res: Respons
     let eventId: number | null = /^\d+$/.test(rawId) ? parseInt(rawId, 10) : null;
 
     if (!eventId) {
-      const event = await eventService.getEventByIdOrUuid(rawId);
+      const event = await eventService.getEventByUuid(rawId);
       eventId = event?.id ?? null;
     }
 
@@ -128,7 +128,7 @@ router.delete('/:id', authenticateToken, async (req: Request, res: Response, nex
     let eventId: number | null = /^\d+$/.test(rawId) ? parseInt(rawId, 10) : null;
 
     if (!eventId) {
-      const event = await eventService.getEventByIdOrUuid(rawId);
+      const event = await eventService.getEventByUuid(rawId);
       eventId = event?.id ?? null;
     }
 
@@ -162,7 +162,7 @@ router.get('/:id/stats', authenticateToken, async (req: Request, res: Response, 
     let eventId: number | null = /^\d+$/.test(rawId) ? parseInt(rawId, 10) : null;
 
     if (!eventId) {
-      const event = await eventService.getEventByIdOrUuid(rawId);
+      const event = await eventService.getEventByUuid(rawId);
       eventId = event?.id ?? null;
     }
 
