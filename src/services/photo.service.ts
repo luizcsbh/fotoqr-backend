@@ -30,7 +30,9 @@ export class PhotoService {
   async processAndUpload(
     files: Express.Multer.File[],
     eventId: number,
-    _storageMode?: 'fallback'
+    _storageMode?: 'fallback',
+    /** Files that automatic moderation flagged or could not check, with the reason */
+    reviewReasons: Map<Express.Multer.File, string> = new Map()
   ): Promise<UploadResult[]> {
     if (!files || files.length === 0) {
       return [];
@@ -48,13 +50,15 @@ export class PhotoService {
 
     const results: UploadResult[] = [];
     let successfullyAddedCount = 0;
-    // With host review on, new photos stay hidden ('pending') until the owner approves them
-    const reviewStatus = event.requirePhotoApproval ? 'pending' : 'approved';
 
     for (const file of files) {
       // Multer decodes multipart filenames as latin1; restore UTF-8 names (e.g. "formatura_três.jpg")
       // and keep them within the varchar(255) column.
       const originalFilename = Buffer.from(file.originalname, 'latin1').toString('utf8').slice(0, 255);
+      // Hidden ('pending') until the owner approves it when host review is on for the event,
+      // or when automatic moderation flagged the photo or could not check it
+      const reviewReason = reviewReasons.get(file) ?? null;
+      const reviewStatus = event.requirePhotoApproval || reviewReason ? 'pending' : 'approved';
 
       try {
         // 2. Image Optimization using Sharp
@@ -147,6 +151,7 @@ export class PhotoService {
             thumbnailData: thumbnailBuffer,
             uploadStatus: 'success',
             reviewStatus,
+            reviewReason,
           })
           .returning();
 

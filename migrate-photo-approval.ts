@@ -6,9 +6,12 @@ async function migrate() {
   console.log('Running photo approval migration...');
 
   try {
-    const file = path.resolve('src/models/migrations/0006_add_photo_approval.sql');
-    await pool.query(fs.readFileSync(file, 'utf8'));
-    console.log('✓ photos.review_status and events.require_photo_approval ready');
+    // Both files are idempotent (IF NOT EXISTS), so re-running is safe
+    for (const name of ['0006_add_photo_approval.sql', '0007_add_photo_review_reason.sql']) {
+      const file = path.resolve('src/models/migrations', name);
+      await pool.query(fs.readFileSync(file, 'utf8'));
+      console.log(`✓ ${name} applied`);
+    }
     console.log('\n✅ Migration complete!');
   } catch (err) {
     console.error('Migration error:', err);

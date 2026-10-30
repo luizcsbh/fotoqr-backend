@@ -11,10 +11,24 @@ import { logger } from '../utils/logger.js';
 
 export interface ModerationResult {
   safe: boolean;
+  /**
+   * - safe: checked and clean
+   * - flagged: checked and likely inappropriate
+   * - failed: the provider could not check the photo (network, quota, timeout)
+   * - disabled: no provider configured
+   */
+  outcome: 'safe' | 'flagged' | 'failed' | 'disabled';
   reason?: string;
   /** Raw confidence score from provider (0-1), higher = more likely to be flagged */
   score?: number;
 }
+
+const flagged = (label: string, score: number): ModerationResult => ({
+  safe: false,
+  outcome: 'flagged',
+  reason: `${label} (${Math.round(score * 100)}% de confiança)`,
+  score,
+});
 
 const SIGHTENGINE_USER = process.env.SIGHTENGINE_USER || '';
 const SIGHTENGINE_SECRET = process.env.SIGHTENGINE_SECRET || '';
@@ -62,30 +76,18 @@ async function checkViaSightengine(imageBuffer: Buffer, mimeType: string): Promi
   const THRESHOLD = 0.6; // Flag if any category is above 60% confidence
 
   if (nudityScore > THRESHOLD) {
-    return {
-      safe: false,
-      reason: 'A imagem foi identificada como contendo conteúdo adulto ou nudez.',
-      score: nudityScore,
-    };
+    return flagged('Possível nudez ou conteúdo adulto', nudityScore);
   }
 
   if (violenceScore > THRESHOLD) {
-    return {
-      safe: false,
-      reason: 'A imagem foi identificada como contendo conteúdo violento.',
-      score: violenceScore,
-    };
+    return flagged('Possível conteúdo violento', violenceScore);
   }
 
   if (goreScore > THRESHOLD) {
-    return {
-      safe: false,
-      reason: 'A imagem foi identificada como contendo conteúdo gráfico impróprio.',
-      score: goreScore,
-    };
+    return flagged('Possível conteúdo gráfico impróprio', goreScore);
   }
 
-  return { safe: true, score: Math.max(nudityScore, violenceScore, goreScore) };
+  return { safe: true, outcome: 'safe', score: Math.max(nudityScore, violenceScore, goreScore) };
 }
 
 /**
@@ -104,12 +106,13 @@ function heuristicCheck(_buffer: Buffer): ModerationResult {
       '[moderation] No moderation API configured. Set SIGHTENGINE_USER and SIGHTENGINE_SECRET in .env to enable automatic content filtering.'
     );
   }
-  return { safe: true };
+  return { safe: true, outcome: 'disabled' };
 }
 
 /**
  * Main moderation function — use in photo upload middleware.
- * Returns { safe: true } to allow, or { safe: false, reason: '...' } to block.
+ * Flagged photos and photos the provider could not check are not discarded:
+ * the upload route sends them to the event owner's manual review queue.
  */
 export async function moderateImage(imageBuffer: Buffer, mimeType: string): Promise<ModerationResult> {
   try {
@@ -118,9 +121,12 @@ export async function moderateImage(imageBuffer: Buffer, mimeType: string): Prom
     }
     return heuristicCheck(imageBuffer);
   } catch (err) {
-    // If moderation API fails (network issue, quota exceeded), fail-open to avoid
-    // blocking legitimate uploads. Log the error for operator review.
-    logger.error('[moderation] Moderation check failed — defaulting to safe:', err);
-    return { safe: true };
+    // Network issue, quota exceeded, timeout...: the photo is kept but goes to manual review
+    logger.error('[moderation] Moderation check failed — sending photo to manual review:', err);
+    return {
+      safe: false,
+      outcome: 'failed',
+      reason: 'A moderação automática não conseguiu analisar esta foto',
+    };
   }
 }

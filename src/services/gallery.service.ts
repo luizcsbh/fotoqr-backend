@@ -62,6 +62,7 @@ export class GalleryService {
         uploadedAt: photos.uploadedAt,
         uploadStatus: photos.uploadStatus,
         reviewStatus: photos.reviewStatus,
+        reviewReason: photos.reviewReason,
         errorMessage: photos.errorMessage,
       })
       .from(photos)

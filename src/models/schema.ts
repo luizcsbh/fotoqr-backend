@@ -105,6 +105,8 @@ export const photos = pgTable(
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
     uploadStatus: uploadStatusEnum('upload_status').default('pending').notNull(),
     reviewStatus: photoReviewStatusEnum('review_status').default('approved').notNull(),
+    // Why automatic moderation sent the photo to manual review (null when it was not flagged)
+    reviewReason: text('review_reason'),
     errorMessage: text('error_message'),
   },
   (table) => [

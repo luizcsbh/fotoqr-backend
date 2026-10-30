@@ -55,9 +55,9 @@ router.post(
         return;
       }
 
-      // Content Moderation: filter each uploaded file before saving
-      const safeFiles: Express.Multer.File[] = [];
-      const blockedFiles: string[] = [];
+      // Automatic moderation: photos flagged by the provider, or that it could not check,
+      // are kept but go to the owner's manual review queue instead of being published
+      const reviewReasons = new Map<Express.Multer.File, string>();
 
       for (const file of files) {
         // Use file.buffer if available (memory storage), or read from disk
@@ -67,39 +67,23 @@ router.post(
         } else if (file.path) {
           buffer = fs.readFileSync(file.path);
         } else {
-          safeFiles.push(file);
           continue;
         }
 
         const modResult = await moderateImage(buffer, file.mimetype);
-        if (!modResult.safe) {
-          logger.warn(`[moderation] Blocked file "${file.originalname}": ${modResult.reason}`);
-          blockedFiles.push(file.originalname);
-        } else {
-          safeFiles.push(file);
+        if (modResult.outcome === 'flagged' || modResult.outcome === 'failed') {
+          logger.warn(`[moderation] Photo "${file.originalname}" sent to manual review: ${modResult.reason}`);
+          reviewReasons.set(file, modResult.reason ?? 'Revisão manual necessária');
         }
       }
 
-      // If ALL files were blocked, return error immediately
-      if (safeFiles.length === 0 && blockedFiles.length > 0) {
-        res.status(422).json({
-          success: false,
-          error: 'Suas fotos foram bloqueadas pela moderação automática de conteúdo. Certifique-se de enviar apenas imagens apropriadas (sem nudez ou violência).',
-          blocked: blockedFiles,
-        });
-        return;
-      }
-
-      const results = await photoService.processAndUpload(safeFiles, event.id, event.storageMode);
+      const results = await photoService.processAndUpload(files, event.id, event.storageMode, reviewReasons);
       const successCount = results.filter((r) => r.status === 'success').length;
       const duplicateCount = results.filter((r) => r.status === 'duplicate').length;
       const failCount = results.filter((r) => r.status === 'failed').length;
 
       let message = `${successCount} fotos enviadas com sucesso!`;
       if (duplicateCount > 0) message += ` (${duplicateCount} duplicadas ignoradas)`;
-      if (blockedFiles.length > 0) {
-        message += ` ${blockedFiles.length} foto(s) bloqueada(s) pela moderação automática.`;
-      }
       const pendingCount = results.filter((r) => r.status === 'success' && r.pendingApproval).length;
       if (pendingCount > 0) {
         message += ' As fotos aparecem na galeria depois da aprovação do anfitrião.';
@@ -113,10 +97,8 @@ router.post(
           success: successCount,
           duplicate: duplicateCount,
           failed: failCount,
-          blocked: blockedFiles.length,
           pendingApproval: pendingCount,
         },
-        blockedFiles: blockedFiles.length > 0 ? blockedFiles : undefined,
         results,
       });
     } catch (error) {
@@ -164,6 +146,8 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
       mime_type: p.mimeType,
       storage_provider: p.storageProvider,
       review_status: p.reviewStatus,
+      // Moderation details are only for the owner's review queue
+      ...(reviewStatus === 'pending' && { review_reason: p.reviewReason }),
       uploaded_at: p.uploadedAt ? p.uploadedAt.toISOString() : new Date().toISOString(),
     }));
 
