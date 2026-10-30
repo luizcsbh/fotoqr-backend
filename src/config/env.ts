@@ -31,7 +31,10 @@ export const env: EnvConfig = {
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
-  BACKEND_PUBLIC_URL: process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001',
+  BACKEND_PUBLIC_URL: (process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001')
+    .split(',')[0]
+    .trim()
+    .replace(/\/+$/, ''),
   DATABASE_URL: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/fotoqr',
   SESSION_SECRET: process.env.SESSION_SECRET || 'dev-session-secret-at-least-32-chars-long-123456',
   JWT_SECRET: process.env.JWT_SECRET || process.env.SESSION_SECRET || 'dev-jwt-secret-at-least-32-chars-long-123456',

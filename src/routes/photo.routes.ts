@@ -1,4 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos } from '../models/schema.js';
@@ -101,7 +103,7 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
       filename: p.storedFilename,
       original_name: p.originalFilename,
       url: p.url,
-      thumbnail_url: p.url,
+      thumbnail_url: p.thumbnail_url || p.url,
       size: p.fileSize,
       mime_type: p.mimeType,
       storage_provider: p.storageProvider,
@@ -148,7 +150,7 @@ router.get('/events/:uuid/gallery', async (req: Request, res: Response, next: Ne
       filename: p.storedFilename,
       original_name: p.originalFilename,
       url: p.url,
-      thumbnail_url: p.url,
+      thumbnail_url: p.thumbnail_url || p.url,
       size: p.fileSize,
       mime_type: p.mimeType,
       storage_provider: p.storageProvider,
@@ -230,6 +232,115 @@ const handleZipDownload = async (req: Request, res: Response, next: NextFunction
 
 router.get('/events/:idOrUuid/download', optionalAuth, handleZipDownload);
 router.get('/events/:id/photos/download', authenticateToken, handleZipDownload);
+
+/**
+ * GET /api/photos/:id/file
+ * GET /api/photos/:id
+ * Streams the photo image binary directly from the database.
+ */
+router.get(['/photos/:id/file', '/photos/:id'], async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const photoId = parseInt(req.params.id as string, 10);
+    if (isNaN(photoId)) {
+      res.status(400).json({ success: false, error: 'ID da foto inválido.' });
+      return;
+    }
+
+    const [photo] = await db
+      .select({
+        mimeType: photos.mimeType,
+        fileData: photos.fileData,
+        storedFilename: photos.storedFilename,
+        originalFilename: photos.originalFilename,
+        storagePath: photos.storagePath,
+        storageProvider: photos.storageProvider,
+      })
+      .from(photos)
+      .where(eq(photos.id, photoId))
+      .limit(1);
+
+    if (!photo) {
+      res.status(404).json({ success: false, error: 'Foto não encontrada.' });
+      return;
+    }
+
+    if (photo.fileData) {
+      res.setHeader('Content-Type', photo.mimeType || 'image/jpeg');
+      res.setHeader('Content-Length', photo.fileData.length);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Content-Disposition', `inline; filename="${photo.storedFilename}"`);
+      res.end(photo.fileData);
+      return;
+    }
+
+    // Fallback if legacy photo stored locally on disk
+    if (photo.storagePath && photo.storagePath !== 'database') {
+      const fullPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
+      if (fs.existsSync(fullPath)) {
+        res.sendFile(fullPath);
+        return;
+      }
+    }
+
+    res.status(404).json({ success: false, error: 'Arquivo da foto não encontrado.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photos/:id/thumbnail
+ * Streams the thumbnail binary directly from the database.
+ */
+router.get('/photos/:id/thumbnail', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const photoId = parseInt(req.params.id as string, 10);
+    if (isNaN(photoId)) {
+      res.status(400).json({ success: false, error: 'ID da foto inválido.' });
+      return;
+    }
+
+    const [photo] = await db
+      .select({
+        mimeType: photos.mimeType,
+        thumbnailData: photos.thumbnailData,
+        fileData: photos.fileData,
+        storedFilename: photos.storedFilename,
+        storagePath: photos.storagePath,
+      })
+      .from(photos)
+      .where(eq(photos.id, photoId))
+      .limit(1);
+
+    if (!photo) {
+      res.status(404).json({ success: false, error: 'Foto não encontrada.' });
+      return;
+    }
+
+    const buffer = photo.thumbnailData || photo.fileData;
+    if (buffer) {
+      res.setHeader('Content-Type', photo.mimeType || 'image/jpeg');
+      res.setHeader('Content-Length', buffer.length);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Content-Disposition', `inline; filename="thumb_${photo.storedFilename}"`);
+      res.end(buffer);
+      return;
+    }
+
+    // Fallback if legacy photo stored locally on disk
+    if (photo.storagePath && photo.storagePath !== 'database') {
+      const fullPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
+      if (fs.existsSync(fullPath)) {
+        res.sendFile(fullPath);
+        return;
+      }
+    }
+
+    res.status(404).json({ success: false, error: 'Miniatura da foto não encontrada.' });
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * DELETE /api/photos/:id

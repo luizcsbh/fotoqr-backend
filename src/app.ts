@@ -15,6 +15,7 @@ import authRoutes from './routes/auth.routes.js';
 import eventRoutes from './routes/event.routes.js';
 import photoRoutes from './routes/photo.routes.js';
 import healthRoutes from './routes/health.routes.js';
+import { getUserAvatar } from './services/auth.service.js';
 
 export const createApp = (): Express => {
   const app: Express = express();
@@ -31,8 +32,10 @@ export const createApp = (): Express => {
   );
 
   // CORS Configuration
+  const rawOrigins = [env.FRONTEND_URL, ...env.CORS_ALLOWED_ORIGINS];
+  const splitOrigins = rawOrigins.flatMap((item) => (item ? item.split(',') : [])).map((s) => s.trim()).filter(Boolean);
   const allowedOrigins = new Set(
-    [env.FRONTEND_URL, ...env.CORS_ALLOWED_ORIGINS]
+    splitOrigins
       .map((allowedOrigin) => {
         try {
           return new URL(allowedOrigin).origin;
@@ -97,6 +100,28 @@ export const createApp = (): Express => {
 
   // Health check endpoint (not rate-limited)
   app.use('/api/health', healthRoutes);
+
+  // User avatar endpoint (publicly accessible, image cached)
+  app.get('/api/users/:id/avatar', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = parseInt(req.params.id as string, 10);
+      if (isNaN(userId)) {
+        res.status(400).send('ID de usuário inválido.');
+        return;
+      }
+      const avatar = await getUserAvatar(userId);
+      if (!avatar) {
+        res.status(404).send('Avatar não encontrado.');
+        return;
+      }
+      res.setHeader('Content-Type', avatar.mimeType);
+      res.setHeader('Content-Length', avatar.data.length);
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      res.end(avatar.data);
+    } catch (error) {
+      next(error);
+    }
+  });
 
   // General API Rate Limiter
   app.use('/api', apiLimiter);

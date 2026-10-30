@@ -2,8 +2,6 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import sharp from 'sharp';
 import { db } from '../config/database.js';
 import { users, User } from '../models/schema.js';
@@ -165,50 +163,53 @@ export async function changePassword(
 }
 
 export async function updateAvatar(userId: number, image: Buffer): Promise<User> {
-  const uploadDir = path.resolve(process.cwd(), 'uploads', 'avatars');
-  await fs.mkdir(uploadDir, { recursive: true });
-  const filename = `${randomUUID()}.webp`;
-  const avatarPath = path.join(uploadDir, filename);
-
+  let processedBuffer: Buffer;
   try {
-    await sharp(image, { limitInputPixels: 40_000_000 })
+    processedBuffer = await sharp(image, { limitInputPixels: 40_000_000 })
       .rotate()
       .resize(512, 512, { fit: 'cover', position: 'attention' })
       .webp({ quality: 82 })
-      .toFile(avatarPath);
-  } catch {
-    await fs.unlink(avatarPath).catch((cleanupError: NodeJS.ErrnoException) => {
-      if (cleanupError.code !== 'ENOENT') logger.error('Não foi possível remover a imagem inválida enviada.', cleanupError);
-    });
+      .toBuffer();
+  } catch (err) {
+    logger.error('Não foi possível processar a imagem enviada para o avatar:', err);
     throw new AuthServiceError('Não foi possível processar a imagem enviada.', 400);
   }
 
-  try {
-    const avatarUrl = new URL(`/uploads/avatars/${filename}`, env.BACKEND_PUBLIC_URL).toString();
-    const [previousUser] = await db.select({ avatarUrl: users.avatarUrl }).from(users)
-      .where(eq(users.id, userId)).limit(1);
-    const [user] = await db
-      .update(users)
-      .set({ avatarUrl, updatedAt: new Date() })
-      .where(eq(users.id, userId))
-      .returning();
+  const avatarUrl = `/api/users/${userId}/avatar`;
+  const [user] = await db
+    .update(users)
+    .set({
+      avatarUrl,
+      avatarData: processedBuffer,
+      avatarMimeType: 'image/webp',
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId))
+    .returning();
 
-    if (!user) throw new AuthServiceError('Usuário não encontrado.', 404);
+  if (!user) throw new AuthServiceError('Usuário não encontrado.', 404);
 
-    const previousFilename = previousUser?.avatarUrl?.match(/\/uploads\/avatars\/([a-f0-9-]+\.webp)$/)?.[1];
-    if (previousFilename && previousFilename !== filename) {
-      await fs.unlink(path.join(uploadDir, previousFilename)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') logger.warn('Não foi possível remover o avatar anterior.', error);
-      });
-    }
+  return user;
+}
 
-    return user;
-  } catch (error) {
-    await fs.unlink(avatarPath).catch((cleanupError: NodeJS.ErrnoException) => {
-      if (cleanupError.code !== 'ENOENT') logger.error('Não foi possível remover o avatar não associado.', cleanupError);
-    });
-    throw error;
+export async function getUserAvatar(userId: number): Promise<{ data: Buffer; mimeType: string } | null> {
+  const [user] = await db
+    .select({
+      avatarData: users.avatarData,
+      avatarMimeType: users.avatarMimeType,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  if (!user || !user.avatarData) {
+    return null;
   }
+
+  return {
+    data: user.avatarData,
+    mimeType: user.avatarMimeType || 'image/webp',
+  };
 }
 
 /**

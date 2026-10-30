@@ -9,12 +9,26 @@ import {
   pgEnum,
   index,
   uniqueIndex,
+  customType,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
+// Custom bytea column definition for binary storage in PostgreSQL
+export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return 'bytea';
+  },
+  toDriver(val: Buffer): Buffer {
+    return val;
+  },
+  fromDriver(val: unknown): Buffer {
+    return Buffer.isBuffer(val) ? val : Buffer.from(val as any);
+  },
+});
+
 // Enums
 export const storageModeEnum = pgEnum('storage_mode', ['fallback']);
-export const storageProviderEnum = pgEnum('storage_provider', ['google_photos', 'supabase', 'local']);
+export const storageProviderEnum = pgEnum('storage_provider', ['google_photos', 'supabase', 'local', 'database']);
 export const uploadStatusEnum = pgEnum('upload_status', ['pending', 'success', 'failed']);
 
 // Users table
@@ -25,6 +39,8 @@ export const users = pgTable(
     email: varchar('email', { length: 255 }).notNull(),
     name: varchar('name', { length: 255 }).notNull(),
     avatarUrl: text('avatar_url'),
+    avatarData: bytea('avatar_data'),
+    avatarMimeType: varchar('avatar_mime_type', { length: 50 }),
     passwordHash: text('password_hash'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -79,6 +95,8 @@ export const photos = pgTable(
     mimeType: varchar('mime_type', { length: 100 }).notNull(),
     fileSize: integer('file_size').notNull(),
     fileHash: varchar('file_hash', { length: 64 }),
+    fileData: bytea('file_data'),
+    thumbnailData: bytea('thumbnail_data'),
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
     uploadStatus: uploadStatusEnum('upload_status').default('pending').notNull(),
     errorMessage: text('error_message'),

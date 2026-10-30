@@ -7,6 +7,7 @@ import {
   updateProfile,
   changePassword,
   updateAvatar,
+  getUserAvatar,
 } from '../services/auth.service.js';
 import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
@@ -116,6 +117,33 @@ router.post(
     }
   }
 );
+
+/**
+ * GET /api/auth/avatar/:userId
+ * Retrieves the user's avatar image directly from the database.
+ */
+router.get('/avatar/:userId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = parseInt(req.params.userId as string, 10);
+    if (isNaN(userId)) {
+      res.status(400).send('ID de usuário inválido.');
+      return;
+    }
+
+    const avatar = await getUserAvatar(userId);
+    if (!avatar) {
+      res.status(404).send('Avatar não encontrado.');
+      return;
+    }
+
+    res.setHeader('Content-Type', avatar.mimeType);
+    res.setHeader('Content-Length', avatar.data.length);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.end(avatar.data);
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * POST /api/auth/logout

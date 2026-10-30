@@ -7,8 +7,9 @@ import { photos, events, Photo } from '../models/schema.js';
 import { localStorageService } from './local.storage.service.js';
 import { logger } from '../utils/logger.js';
 
-export interface PhotoWithUrl extends Photo {
+export interface PhotoWithUrl extends Omit<Photo, 'fileData' | 'thumbnailData'> {
   url: string;
+  thumbnail_url?: string;
 }
 
 export interface PaginatedPhotos {
@@ -43,27 +44,47 @@ export class GalleryService {
     const total = countResult?.count || 0;
     const totalPages = Math.ceil(total / validLimit);
 
-    // Get records
+    // Get metadata records (exclude heavy binary data for fast listing)
     const photoList = await db
-      .select()
+      .select({
+        id: photos.id,
+        eventId: photos.eventId,
+        originalFilename: photos.originalFilename,
+        storedFilename: photos.storedFilename,
+        storagePath: photos.storagePath,
+        storageProvider: photos.storageProvider,
+        mimeType: photos.mimeType,
+        fileSize: photos.fileSize,
+        fileHash: photos.fileHash,
+        uploadedAt: photos.uploadedAt,
+        uploadStatus: photos.uploadStatus,
+        errorMessage: photos.errorMessage,
+      })
       .from(photos)
       .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')))
       .orderBy(desc(photos.uploadedAt))
       .limit(validLimit)
       .offset(offset);
 
-    // Resolve URLs
+    // Resolve URLs pointing to database photo endpoints
     const photosWithUrl: PhotoWithUrl[] = photoList.map((photo) => {
-      let url = '';
-      if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
-        url = localStorageService.getPhotoUrl(photo.storagePath);
+      let url = `/api/photos/${photo.id}/file`;
+      let thumbnailUrl = `/api/photos/${photo.id}/thumbnail`;
+
+      if (photo.storageProvider === 'local' && photo.storagePath !== 'database') {
+        const fullLocalPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
+        if (fs.existsSync(fullLocalPath)) {
+          url = localStorageService.getPhotoUrl(photo.storagePath);
+          thumbnailUrl = url;
+        }
       }
+
       return {
         ...photo,
         url,
+        thumbnail_url: thumbnailUrl,
       };
     });
-
 
     return {
       photos: photosWithUrl,
@@ -91,7 +112,14 @@ export class GalleryService {
     }
 
     const eventPhotos = await db
-      .select()
+      .select({
+        id: photos.id,
+        originalFilename: photos.originalFilename,
+        storedFilename: photos.storedFilename,
+        storagePath: photos.storagePath,
+        storageProvider: photos.storageProvider,
+        fileData: photos.fileData,
+      })
       .from(photos)
       .where(filterCondition);
 
@@ -126,7 +154,9 @@ export class GalleryService {
           }
           usedNames.add(fileName);
 
-          if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
+          if (photo.fileData) {
+            archive.append(photo.fileData, { name: fileName });
+          } else if (photo.storagePath) {
             const fullLocalPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
             if (fs.existsSync(fullLocalPath)) {
               archive.file(fullLocalPath, { name: fileName });
