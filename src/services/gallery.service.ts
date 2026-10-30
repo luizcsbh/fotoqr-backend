@@ -29,7 +29,8 @@ export class GalleryService {
   async getEventPhotos(
     eventId: number,
     page: number = 1,
-    limit: number = 20
+    limit: number = 20,
+    reviewStatus: 'approved' | 'pending' = 'approved'
   ): Promise<PaginatedPhotos> {
     const validPage = Math.max(1, page);
     const validLimit = Math.min(100, Math.max(1, limit));
@@ -39,7 +40,9 @@ export class GalleryService {
     const [countResult] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(photos)
-      .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')));
+      .where(
+        and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'), eq(photos.reviewStatus, reviewStatus))
+      );
 
     const total = countResult?.count || 0;
     const totalPages = Math.ceil(total / validLimit);
@@ -58,10 +61,13 @@ export class GalleryService {
         fileHash: photos.fileHash,
         uploadedAt: photos.uploadedAt,
         uploadStatus: photos.uploadStatus,
+        reviewStatus: photos.reviewStatus,
         errorMessage: photos.errorMessage,
       })
       .from(photos)
-      .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')))
+      .where(
+        and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'), eq(photos.reviewStatus, reviewStatus))
+      )
       .orderBy(desc(photos.uploadedAt))
       .limit(validLimit)
       .offset(offset);
@@ -106,7 +112,12 @@ export class GalleryService {
       throw new Error('Evento não encontrado para geração de download.');
     }
 
-    let filterCondition = and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'));
+    // Photos waiting for host review are never included in downloads
+    let filterCondition = and(
+      eq(photos.eventId, eventId),
+      eq(photos.uploadStatus, 'success'),
+      eq(photos.reviewStatus, 'approved')
+    );
     if (photoIds && photoIds.length > 0) {
       filterCondition = and(filterCondition, inArray(photos.id, photoIds));
     }

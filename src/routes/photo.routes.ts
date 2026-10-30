@@ -100,6 +100,10 @@ router.post(
       if (blockedFiles.length > 0) {
         message += ` ${blockedFiles.length} foto(s) bloqueada(s) pela moderação automática.`;
       }
+      const pendingCount = results.filter((r) => r.status === 'success' && r.pendingApproval).length;
+      if (pendingCount > 0) {
+        message += ' As fotos aparecem na galeria depois da aprovação do anfitrião.';
+      }
 
       res.status(200).json({
         success: true,
@@ -110,6 +114,7 @@ router.post(
           duplicate: duplicateCount,
           failed: failCount,
           blocked: blockedFiles.length,
+          pendingApproval: pendingCount,
         },
         blockedFiles: blockedFiles.length > 0 ? blockedFiles : undefined,
         results,
@@ -139,7 +144,14 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
       return;
     }
 
-    const galleryData = await galleryService.getEventPhotos(event.id, page, limit);
+    // ?review=pending lists the photos waiting for approval — only the event owner may see them
+    const reviewStatus = req.query.review === 'pending' ? 'pending' : 'approved';
+    if (reviewStatus === 'pending' && event.userId !== req.user?.id) {
+      res.status(403).json({ success: false, error: 'Apenas o dono do evento pode ver fotos pendentes.' });
+      return;
+    }
+
+    const galleryData = await galleryService.getEventPhotos(event.id, page, limit, reviewStatus);
 
     const formattedPhotos = galleryData.photos.map((p) => ({
       id: String(p.id),
@@ -151,6 +163,7 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
       size: p.fileSize,
       mime_type: p.mimeType,
       storage_provider: p.storageProvider,
+      review_status: p.reviewStatus,
       uploaded_at: p.uploadedAt ? p.uploadedAt.toISOString() : new Date().toISOString(),
     }));
 
@@ -278,11 +291,32 @@ router.get('/events/:idOrUuid/download', optionalAuth, handleZipDownload);
 router.get('/events/:id/photos/download', authenticateToken, handleZipDownload);
 
 /**
+ * Photos waiting for approval are only served to the owner of their event.
+ * Returns the Cache-Control to use, or null when the request must be refused.
+ */
+async function resolvePhotoAccess(
+  photo: { reviewStatus: 'approved' | 'pending'; eventId: number },
+  req: Request
+): Promise<string | null> {
+  if (photo.reviewStatus === 'approved') return 'public, max-age=31536000, immutable';
+  if (!req.user) return null;
+
+  const [owner] = await db
+    .select({ userId: events.userId })
+    .from(events)
+    .where(eq(events.id, photo.eventId))
+    .limit(1);
+
+  // Never let shared caches keep a private pending photo
+  return owner?.userId === req.user.id ? 'private, no-store' : null;
+}
+
+/**
  * GET /api/photos/:id/file
  * GET /api/photos/:id
  * Streams the photo image binary directly from the database.
  */
-router.get(['/photos/:id/file', '/photos/:id'], async (req: Request, res: Response, next: NextFunction) => {
+router.get(['/photos/:id/file', '/photos/:id'], optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const photoId = parseInt(req.params.id as string, 10);
     if (isNaN(photoId)) {
@@ -298,12 +332,15 @@ router.get(['/photos/:id/file', '/photos/:id'], async (req: Request, res: Respon
         originalFilename: photos.originalFilename,
         storagePath: photos.storagePath,
         storageProvider: photos.storageProvider,
+        reviewStatus: photos.reviewStatus,
+        eventId: photos.eventId,
       })
       .from(photos)
       .where(eq(photos.id, photoId))
       .limit(1);
 
-    if (!photo) {
+    const cacheControl = photo ? await resolvePhotoAccess(photo, req) : null;
+    if (!photo || !cacheControl) {
       res.status(404).json({ success: false, error: 'Foto não encontrada.' });
       return;
     }
@@ -311,7 +348,7 @@ router.get(['/photos/:id/file', '/photos/:id'], async (req: Request, res: Respon
     if (photo.fileData) {
       res.setHeader('Content-Type', photo.mimeType || 'image/jpeg');
       res.setHeader('Content-Length', photo.fileData.length);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cache-Control', cacheControl);
       res.setHeader('Content-Disposition', `inline; filename="${photo.storedFilename}"`);
       res.end(photo.fileData);
       return;
@@ -336,7 +373,7 @@ router.get(['/photos/:id/file', '/photos/:id'], async (req: Request, res: Respon
  * GET /api/photos/:id/thumbnail
  * Streams the thumbnail binary directly from the database.
  */
-router.get('/photos/:id/thumbnail', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/photos/:id/thumbnail', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const photoId = parseInt(req.params.id as string, 10);
     if (isNaN(photoId)) {
@@ -351,12 +388,15 @@ router.get('/photos/:id/thumbnail', async (req: Request, res: Response, next: Ne
         fileData: photos.fileData,
         storedFilename: photos.storedFilename,
         storagePath: photos.storagePath,
+        reviewStatus: photos.reviewStatus,
+        eventId: photos.eventId,
       })
       .from(photos)
       .where(eq(photos.id, photoId))
       .limit(1);
 
-    if (!photo) {
+    const cacheControl = photo ? await resolvePhotoAccess(photo, req) : null;
+    if (!photo || !cacheControl) {
       res.status(404).json({ success: false, error: 'Foto não encontrada.' });
       return;
     }
@@ -365,7 +405,7 @@ router.get('/photos/:id/thumbnail', async (req: Request, res: Response, next: Ne
     if (buffer) {
       res.setHeader('Content-Type', photo.mimeType || 'image/jpeg');
       res.setHeader('Content-Length', buffer.length);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cache-Control', cacheControl);
       res.setHeader('Content-Disposition', `inline; filename="thumb_${photo.storedFilename}"`);
       res.end(buffer);
       return;
@@ -431,18 +471,87 @@ router.delete('/photos/:id', authenticateToken, async (req: Request, res: Respon
     // Delete photo record from database
     await db.delete(photos).where(eq(photos.id, photoId));
 
-    // Decrement event photo_count
-    await db
-      .update(events)
-      .set({
-        photoCount: sql`GREATEST(0, ${events.photoCount} - 1)`,
-        updatedAt: new Date(),
-      })
-      .where(eq(events.id, result.event.id));
+    // Decrement event photo_count (pending photos were never counted)
+    if (result.photo.reviewStatus === 'approved') {
+      await db
+        .update(events)
+        .set({
+          photoCount: sql`GREATEST(0, ${events.photoCount} - 1)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(events.id, result.event.id));
+    }
 
     res.status(200).json({
       success: true,
       message: 'Foto excluída com sucesso.',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photos/:id/approve
+ * Publishes a photo that is waiting for review (event owner only).
+ */
+router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const photoId = parseInt(req.params.id as string, 10);
+    if (isNaN(photoId)) {
+      res.status(400).json({ success: false, error: 'ID da foto inválido.' });
+      return;
+    }
+
+    const [result] = await db
+      .select({ eventId: photos.eventId })
+      .from(photos)
+      .innerJoin(events, eq(photos.eventId, events.id))
+      .where(and(eq(photos.id, photoId), eq(events.userId, req.user!.id)))
+      .limit(1);
+
+    if (!result) {
+      res.status(404).json({
+        success: false,
+        error: 'Foto não encontrada ou você não tem permissão para aprová-la.',
+      });
+      return;
+    }
+
+    const approved = await photoService.approvePhotos(result.eventId, [photoId]);
+    res.status(200).json({
+      success: true,
+      approved,
+      message: approved > 0 ? 'Foto aprovada e publicada na galeria.' : 'Esta foto já estava aprovada.',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/events/:id/photos/approve
+ * Publishes every photo of the event that is waiting for review (event owner only).
+ * Body: { photoIds?: number[] } — limits the approval to those photos.
+ */
+router.post('/events/:id/photos/approve', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, req.user!.id);
+    if (!event || event.userId !== req.user!.id) {
+      res.status(404).json({ success: false, error: 'Evento não encontrado.' });
+      return;
+    }
+
+    const rawIds = req.body?.photoIds;
+    const photoIds = Array.isArray(rawIds)
+      ? rawIds.map((x: unknown) => Number(x)).filter((n) => Number.isInteger(n) && n > 0)
+      : undefined;
+
+    const approved = await photoService.approvePhotos(event.id, photoIds);
+    res.status(200).json({
+      success: true,
+      approved,
+      message: approved > 0 ? `${approved} foto(s) aprovada(s) e publicada(s) na galeria.` : 'Nenhuma foto pendente.',
     });
   } catch (error) {
     next(error);

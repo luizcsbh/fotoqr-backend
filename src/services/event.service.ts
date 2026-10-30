@@ -31,6 +31,8 @@ export interface EventStats {
   uuid: string;
   isActive: boolean;
   totalPhotos: number;
+  /** Photos waiting for host approval (not counted in totalPhotos) */
+  pendingPhotos: number;
   totalStorageBytes: number;
   storageMode: string;
   providersBreakdown: Record<string, number>;
@@ -209,6 +211,34 @@ export class EventService {
   }
 
   /**
+   * Turns host review of guest photos on or off (toggles when `enabled` is omitted).
+   * Photos already waiting stay pending until the owner approves or deletes them.
+   */
+  async setPhotoApprovalRequired(eventId: number, userId: number, enabled?: boolean): Promise<Event> {
+    const [event] = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.id, eventId), eq(events.userId, userId)))
+      .limit(1);
+
+    if (!event) {
+      throw new Error('Evento não encontrado ou acesso não autorizado.');
+    }
+
+    const [updatedEvent] = await db
+      .update(events)
+      .set({
+        requirePhotoApproval: enabled ?? !event.requirePhotoApproval,
+        updatedAt: new Date(),
+      })
+      .where(eq(events.id, eventId))
+      .returning();
+
+    logger.info(`Aprovação de fotos do evento ${eventId} alterada para requirePhotoApproval=${updatedEvent.requirePhotoApproval}`);
+    return updatedEvent;
+  }
+
+  /**
    * Deletes an event and its associated photos.
    */
   async deleteEvent(eventId: number, userId: number): Promise<void> {
@@ -249,7 +279,16 @@ export class EventService {
         latestUpload: sql<Date | null>`max(${photos.uploadedAt})`,
       })
       .from(photos)
-      .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')));
+      .where(
+        and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'), eq(photos.reviewStatus, 'approved'))
+      );
+
+    const [pending] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(photos)
+      .where(
+        and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'), eq(photos.reviewStatus, 'pending'))
+      );
 
     // Breakdown by storage provider
     const breakdownRows = await db
@@ -258,7 +297,9 @@ export class EventService {
         count: sql<number>`count(*)::int`,
       })
       .from(photos)
-      .where(and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success')))
+      .where(
+        and(eq(photos.eventId, eventId), eq(photos.uploadStatus, 'success'), eq(photos.reviewStatus, 'approved'))
+      )
       .groupBy(photos.storageProvider);
 
     const providersBreakdown: Record<string, number> = {};
@@ -272,6 +313,7 @@ export class EventService {
       uuid: event.uuid,
       isActive: event.isActive,
       totalPhotos: aggregate?.totalPhotos || 0,
+      pendingPhotos: pending?.count || 0,
       totalStorageBytes: Number(aggregate?.totalBytes || 0),
       storageMode: event.storageMode,
       providersBreakdown,

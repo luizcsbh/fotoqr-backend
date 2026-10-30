@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos, Photo } from '../models/schema.js';
 import { logger } from '../utils/logger.js';
@@ -17,6 +17,8 @@ export interface UploadResult {
   fileSize: number;
   status: 'success' | 'failed' | 'duplicate';
   error?: string;
+  /** Saved, but hidden from the public gallery until the event owner approves it */
+  pendingApproval?: boolean;
 }
 
 export class PhotoService {
@@ -46,6 +48,8 @@ export class PhotoService {
 
     const results: UploadResult[] = [];
     let successfullyAddedCount = 0;
+    // With host review on, new photos stay hidden ('pending') until the owner approves them
+    const reviewStatus = event.requirePhotoApproval ? 'pending' : 'approved';
 
     for (const file of files) {
       // Multer decodes multipart filenames as latin1; restore UTF-8 names (e.g. "formatura_três.jpg")
@@ -142,10 +146,12 @@ export class PhotoService {
             fileData: processedBuffer,
             thumbnailData: thumbnailBuffer,
             uploadStatus: 'success',
+            reviewStatus,
           })
           .returning();
 
-        successfullyAddedCount++;
+        // photo_count only counts photos visible in the public gallery
+        if (reviewStatus === 'approved') successfullyAddedCount++;
 
         results.push({
           id: photoRecord.id,
@@ -157,6 +163,7 @@ export class PhotoService {
           thumbnailUrl: `/api/photos/${photoRecord.id}/thumbnail`,
           fileSize,
           status: 'success',
+          pendingApproval: reviewStatus === 'pending',
         });
       } catch (fileError) {
         logger.error(`Erro ao processar foto ${originalFilename}:`, fileError);
@@ -189,6 +196,33 @@ export class PhotoService {
     }
 
     return results;
+  }
+
+  /**
+   * Approves pending photos of an event (all of them when `photoIds` is omitted),
+   * publishing them to the gallery and adding them to the event photo count.
+   */
+  async approvePhotos(eventId: number, photoIds?: number[]): Promise<number> {
+    const conditions = [eq(photos.eventId, eventId), eq(photos.reviewStatus, 'pending')];
+    if (photoIds && photoIds.length > 0) conditions.push(inArray(photos.id, photoIds));
+
+    const approved = await db
+      .update(photos)
+      .set({ reviewStatus: 'approved' })
+      .where(and(...conditions))
+      .returning({ id: photos.id });
+
+    if (approved.length > 0) {
+      await db
+        .update(events)
+        .set({
+          photoCount: sql`${events.photoCount} + ${approved.length}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(events.id, eventId));
+    }
+
+    return approved.length;
   }
 }
 

@@ -31,6 +31,8 @@ export const storageModeEnum = pgEnum('storage_mode', ['fallback']);
 export const storageProviderEnum = pgEnum('storage_provider', ['google_photos', 'supabase', 'local', 'database']);
 export const uploadStatusEnum = pgEnum('upload_status', ['pending', 'success', 'failed']);
 export const musicRequestStatusEnum = pgEnum('music_request_status', ['pending', 'approved', 'rejected', 'played']);
+// Host review of guest photos: 'pending' photos stay hidden until the owner approves them
+export const photoReviewStatusEnum = pgEnum('photo_review_status', ['approved', 'pending']);
 
 // Users table
 export const users = pgTable(
@@ -71,6 +73,7 @@ export const events = pgTable(
     storageMode: storageModeEnum('storage_mode').default('fallback').notNull(),
     isActive: boolean('is_active').default(true).notNull(),
     enableDjPlaylist: boolean('enable_dj_playlist').default(false).notNull(),
+    requirePhotoApproval: boolean('require_photo_approval').default(false).notNull(),
     photoCount: integer('photo_count').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -101,12 +104,14 @@ export const photos = pgTable(
     thumbnailData: bytea('thumbnail_data'),
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
     uploadStatus: uploadStatusEnum('upload_status').default('pending').notNull(),
+    reviewStatus: photoReviewStatusEnum('review_status').default('approved').notNull(),
     errorMessage: text('error_message'),
   },
   (table) => [
     index('photos_event_id_idx').on(table.eventId),
     index('photos_file_hash_idx').on(table.eventId, table.fileHash),
     index('photos_upload_status_idx').on(table.uploadStatus),
+    index('photos_review_status_idx').on(table.eventId, table.reviewStatus),
   ]
 );
 
