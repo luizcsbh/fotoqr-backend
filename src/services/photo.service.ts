@@ -4,7 +4,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos, Photo } from '../models/schema.js';
-import { localStorageService } from './local.storage.service.js';
 import { logger } from '../utils/logger.js';
 
 export interface UploadResult {

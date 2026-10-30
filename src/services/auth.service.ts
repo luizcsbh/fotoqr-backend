@@ -2,8 +2,6 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import sharp from 'sharp';
 import { db } from '../config/database.js';
 import { users, User } from '../models/schema.js';
