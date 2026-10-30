@@ -165,6 +165,45 @@ router.patch('/:id/dj-playlist', authenticateToken, async (req: Request, res: Re
 });
 
 /**
+ * GET /api/events/:id/qr-customization
+ * Returns the owner's saved QR code / table card design (null when never saved).
+ */
+router.get('/:id/qr-customization', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.user!.id;
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId);
+    if (!event || event.userId !== userId) {
+      res.status(404).json({ success: false, error: 'Evento não encontrado.' });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: event.qrCustomization ?? null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /api/events/:id/qr-customization
+ * Saves the owner's QR code / table card design so it is the same on every device.
+ */
+router.put('/:id/qr-customization', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.user!.id;
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId);
+    if (!event || event.userId !== userId) {
+      res.status(404).json({ success: false, error: 'Evento não encontrado.' });
+      return;
+    }
+
+    const saved = await eventService.saveQRCustomization(event.id, userId, req.body);
+    res.status(200).json({ success: true, message: 'Personalização do QR Code salva.', data: saved });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * PATCH /api/events/:id/photo-approval
  * Turns host review of guest photos on or off: while on, new photos stay hidden
  * from the gallery until the owner approves them.

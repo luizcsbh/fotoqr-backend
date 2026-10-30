@@ -7,6 +7,7 @@ import { generateQRCode } from '../utils/qrcode.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { localStorageService } from './local.storage.service.js';
+import { QRCustomization, sanitizeQRCustomization } from '../utils/qrCustomization.js';
 
 export interface CreateEventDTO {
   title: string;
@@ -236,6 +237,24 @@ export class EventService {
 
     logger.info(`Aprovação de fotos do evento ${eventId} alterada para requirePhotoApproval=${updatedEvent.requirePhotoApproval}`);
     return updatedEvent;
+  }
+
+  /**
+   * Saves the owner's QR code / table card design for the event (validated, known fields only).
+   */
+  async saveQRCustomization(eventId: number, userId: number, input: unknown): Promise<QRCustomization> {
+    const qrCustomization = sanitizeQRCustomization(input);
+
+    const [updatedEvent] = await db
+      .update(events)
+      .set({ qrCustomization, updatedAt: new Date() })
+      .where(and(eq(events.id, eventId), eq(events.userId, userId)))
+      .returning({ qrCustomization: events.qrCustomization });
+
+    if (!updatedEvent) {
+      throw new Error('Evento não encontrado ou acesso não autorizado.');
+    }
+    return updatedEvent.qrCustomization!;
   }
 
   /**

@@ -10,8 +10,10 @@ import {
   index,
   uniqueIndex,
   customType,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import type { QRCustomization } from '../utils/qrCustomization.js';
 
 // Custom bytea column definition for binary storage in PostgreSQL
 export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -74,6 +76,8 @@ export const events = pgTable(
     isActive: boolean('is_active').default(true).notNull(),
     enableDjPlaylist: boolean('enable_dj_playlist').default(false).notNull(),
     requirePhotoApproval: boolean('require_photo_approval').default(false).notNull(),
+    // Owner's QR code / table card design (null until saved for the first time)
+    qrCustomization: jsonb('qr_customization').$type<QRCustomization>(),
     photoCount: integer('photo_count').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
