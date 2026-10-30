@@ -76,5 +76,27 @@ describe('Photo Upload & Gallery Routes', () => {
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('ID da foto inválido');
     });
+
+    it('GET /api/photos/:id/file returns 400 for bad id', async () => {
+      const res = await request(app).get('/api/photos/abc/file');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('ID da foto inválido');
+    });
+
+    it('GET /api/photos/:id/thumbnail returns 400 for bad id', async () => {
+      const res = await request(app).get('/api/photos/abc/thumbnail');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('ID da foto inválido');
+    });
+
+    it('GET /api/users/:id/avatar returns 400 for bad user id', async () => {
+      const res = await request(app).get('/api/users/abc/avatar');
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/users/:id/avatar returns 404 when avatar not found', async () => {
+      const res = await request(app).get('/api/users/999999/avatar');
+      expect(res.status).toBe(404);
+    });
   });
 });

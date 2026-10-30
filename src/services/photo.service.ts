@@ -14,6 +14,7 @@ export interface UploadResult {
   storageProvider: Photo['storageProvider'];
   storagePath: string;
   publicUrl?: string;
+  thumbnailUrl?: string;
   fileSize: number;
   status: 'success' | 'failed' | 'duplicate';
   error?: string;
@@ -22,7 +23,8 @@ export interface UploadResult {
 export class PhotoService {
   /**
    * Processes images using Sharp (resize max 2048px, 80 quality, EXIF orientation),
-   * checks for duplicates via SHA-256 hash and stores them using local fallback storage.
+   * generates thumbnails, checks for duplicates via SHA-256 hash, and stores them
+   * EXCLUSIVELY in the database.
    */
   async processAndUpload(
     files: Express.Multer.File[],
@@ -66,15 +68,35 @@ export class PhotoService {
 
         // Compress to JPEG 80% quality
         const processedBuffer = await sharpInstance.jpeg({ quality: 80 }).toBuffer();
+
+        // 3. Generate high-efficiency thumbnail (max 400x400)
+        const thumbnailBuffer = await sharp(file.buffer)
+          .rotate()
+          .resize({
+            width: 400,
+            height: 400,
+            fit: 'inside',
+            withoutEnlargement: true,
+          })
+          .jpeg({ quality: 70 })
+          .toBuffer();
+
         const storedFilename = `${uuidv4()}.jpg`;
         const mimeType = 'image/jpeg';
         const fileSize = processedBuffer.length;
 
-        // 3. Duplicate Detection via SHA-256 Hash
+        // 4. Duplicate Detection via SHA-256 Hash
         const fileHash = crypto.createHash('sha256').update(processedBuffer).digest('hex');
 
         const existingPhoto = await db
-          .select()
+          .select({
+            id: photos.id,
+            originalFilename: photos.originalFilename,
+            storedFilename: photos.storedFilename,
+            storageProvider: photos.storageProvider,
+            storagePath: photos.storagePath,
+            fileSize: photos.fileSize,
+          })
           .from(photos)
           .where(
             and(
@@ -93,6 +115,8 @@ export class PhotoService {
             storedFilename: existingPhoto[0].storedFilename,
             storageProvider: existingPhoto[0].storageProvider,
             storagePath: existingPhoto[0].storagePath,
+            publicUrl: `/api/photos/${existingPhoto[0].id}/file`,
+            thumbnailUrl: `/api/photos/${existingPhoto[0].id}/thumbnail`,
             fileSize: existingPhoto[0].fileSize,
             status: 'duplicate',
             error: 'Esta foto já foi enviada anteriormente para este evento.',
@@ -100,49 +124,23 @@ export class PhotoService {
           continue;
         }
 
-        // 4. Create initial pending record in DB
+        // 5. Store directly and exclusively in database
         const [photoRecord] = await db
           .insert(photos)
           .values({
             eventId,
             originalFilename: file.originalname,
             storedFilename,
-            storagePath: 'pending',
-            storageProvider: 'local',
+            storagePath: 'database',
+            storageProvider: 'database',
             mimeType,
             fileSize,
             fileHash,
-            uploadStatus: 'pending',
-          })
-          .returning();
-
-        // 5. Store the processed image locally
-        let finalProvider: 'local' = 'local';
-        let storagePath = '';
-        let publicUrl: string | undefined;
-
-        const fallbackResult = await localStorageService.uploadPhoto(
-          processedBuffer,
-          storedFilename,
-          mimeType,
-          eventId
-        );
-
-        if (!fallbackResult.success) {
-          throw new Error(fallbackResult.error || 'Falha no upload para o armazenamento de contingência.');
-        }
-        storagePath = fallbackResult.storagePath;
-        publicUrl = fallbackResult.publicUrl;
-
-        // 6. Update photo status in DB
-        await db
-          .update(photos)
-          .set({
-            storagePath,
-            storageProvider: finalProvider,
+            fileData: processedBuffer,
+            thumbnailData: thumbnailBuffer,
             uploadStatus: 'success',
           })
-          .where(eq(photos.id, photoRecord.id));
+          .returning();
 
         successfullyAddedCount++;
 
@@ -150,9 +148,10 @@ export class PhotoService {
           id: photoRecord.id,
           originalFilename: file.originalname,
           storedFilename,
-          storageProvider: finalProvider,
-          storagePath,
-          publicUrl,
+          storageProvider: 'database',
+          storagePath: 'database',
+          publicUrl: `/api/photos/${photoRecord.id}/file`,
+          thumbnailUrl: `/api/photos/${photoRecord.id}/thumbnail`,
           fileSize,
           status: 'success',
         });
@@ -161,7 +160,7 @@ export class PhotoService {
         results.push({
           originalFilename: file.originalname,
           storedFilename: '',
-          storageProvider: 'local',
+          storageProvider: 'database',
           storagePath: '',
           fileSize: file.size,
           status: 'failed',
