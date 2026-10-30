@@ -12,6 +12,7 @@ import { uploadMiddleware } from '../middleware/upload.js';
 import { uploadLimiter } from '../middleware/rateLimiter.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
+import { moderateImage } from '../services/moderation.service.js';
 
 const router = Router();
 
@@ -54,20 +55,63 @@ router.post(
         return;
       }
 
-      const results = await photoService.processAndUpload(files, event.id, event.storageMode);
+      // Content Moderation: filter each uploaded file before saving
+      const safeFiles: Express.Multer.File[] = [];
+      const blockedFiles: string[] = [];
+
+      for (const file of files) {
+        // Use file.buffer if available (memory storage), or read from disk
+        let buffer: Buffer;
+        if (file.buffer && file.buffer.length > 0) {
+          buffer = file.buffer;
+        } else if (file.path) {
+          buffer = fs.readFileSync(file.path);
+        } else {
+          safeFiles.push(file);
+          continue;
+        }
+
+        const modResult = await moderateImage(buffer, file.mimetype);
+        if (!modResult.safe) {
+          logger.warn(`[moderation] Blocked file "${file.originalname}": ${modResult.reason}`);
+          blockedFiles.push(file.originalname);
+        } else {
+          safeFiles.push(file);
+        }
+      }
+
+      // If ALL files were blocked, return error immediately
+      if (safeFiles.length === 0 && blockedFiles.length > 0) {
+        res.status(422).json({
+          success: false,
+          error: 'Suas fotos foram bloqueadas pela moderação automática de conteúdo. Certifique-se de enviar apenas imagens apropriadas (sem nudez ou violência).',
+          blocked: blockedFiles,
+        });
+        return;
+      }
+
+      const results = await photoService.processAndUpload(safeFiles, event.id, event.storageMode);
       const successCount = results.filter((r) => r.status === 'success').length;
       const duplicateCount = results.filter((r) => r.status === 'duplicate').length;
       const failCount = results.filter((r) => r.status === 'failed').length;
 
+      let message = `${successCount} fotos enviadas com sucesso!`;
+      if (duplicateCount > 0) message += ` (${duplicateCount} duplicadas ignoradas)`;
+      if (blockedFiles.length > 0) {
+        message += ` ${blockedFiles.length} foto(s) bloqueada(s) pela moderação automática.`;
+      }
+
       res.status(200).json({
         success: true,
-        message: `${successCount} fotos enviadas com sucesso! ${duplicateCount > 0 ? `(${duplicateCount} duplicadas ignoradas)` : ''}`,
+        message,
         summary: {
           total: files.length,
           success: successCount,
           duplicate: duplicateCount,
           failed: failCount,
+          blocked: blockedFiles.length,
         },
+        blockedFiles: blockedFiles.length > 0 ? blockedFiles : undefined,
         results,
       });
     } catch (error) {

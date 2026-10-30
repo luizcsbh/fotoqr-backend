@@ -15,6 +15,7 @@ import authRoutes from './routes/auth.routes.js';
 import eventRoutes from './routes/event.routes.js';
 import photoRoutes from './routes/photo.routes.js';
 import healthRoutes from './routes/health.routes.js';
+import musicRoutes from './routes/music.routes.js';
 import { getUserAvatar } from './services/auth.service.js';
 
 export const createApp = (): Express => {
@@ -46,6 +47,9 @@ export const createApp = (): Express => {
       .filter((origin): origin is string => origin !== null)
   );
 
+  // A rejected origin is a client error (403), not an internal server error (500)
+  const corsError = (message: string) => Object.assign(new Error(message), { statusCode: 403 });
+
   app.use(
     cors({
       origin: (origin, callback) => {
@@ -55,13 +59,13 @@ export const createApp = (): Express => {
         try {
           requestOrigin = new URL(origin).origin;
         } catch {
-          return callback(new Error('Origem inválida pela política de CORS.'));
+          return callback(corsError('Origem inválida pela política de CORS.'));
         }
 
         if (allowedOrigins.has(requestOrigin) || env.NODE_ENV === 'development') {
           return callback(null, true);
         }
-        return callback(new Error('Origem não permitida pela política de CORS.'));
+        return callback(corsError(`Origem não permitida pela política de CORS: ${requestOrigin}`));
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -130,6 +134,7 @@ export const createApp = (): Express => {
   app.use('/api/auth', authRoutes);
   app.use('/api/events', eventRoutes);
   app.use('/api', photoRoutes);
+  app.use('/api', musicRoutes);
 
   // 404 Route Not Found Handler
   app.use((req: Request, res: Response) => {

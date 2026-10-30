@@ -17,6 +17,7 @@ export interface CreateEventDTO {
   endDate?: string | Date;
   end_date?: string | Date;
   storageMode?: 'fallback';
+  enableDjPlaylist?: boolean;
 }
 
 export interface EventWithQR extends Event {
@@ -67,6 +68,7 @@ export class EventService {
         endDate,
         storageMode,
         isActive: true,
+        enableDjPlaylist: data.enableDjPlaylist ?? false,
         photoCount: 0,
       })
       .returning();
@@ -176,6 +178,33 @@ export class EventService {
       .returning();
 
     logger.info(`Status do evento ${eventId} alterado para isActive=${updatedEvent.isActive}`);
+    return updatedEvent;
+  }
+
+  /**
+   * Turns the guests' DJ song request playlist on or off (toggles when `enabled` is omitted).
+   */
+  async setDjPlaylistEnabled(eventId: number, userId: number, enabled?: boolean): Promise<Event> {
+    const [event] = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.id, eventId), eq(events.userId, userId)))
+      .limit(1);
+
+    if (!event) {
+      throw new Error('Evento não encontrado ou acesso não autorizado.');
+    }
+
+    const [updatedEvent] = await db
+      .update(events)
+      .set({
+        enableDjPlaylist: enabled ?? !event.enableDjPlaylist,
+        updatedAt: new Date(),
+      })
+      .where(eq(events.id, eventId))
+      .returning();
+
+    logger.info(`Playlist do DJ do evento ${eventId} alterada para enableDjPlaylist=${updatedEvent.enableDjPlaylist}`);
     return updatedEvent;
   }
 

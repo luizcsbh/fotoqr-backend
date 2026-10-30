@@ -30,6 +30,7 @@ export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 export const storageModeEnum = pgEnum('storage_mode', ['fallback']);
 export const storageProviderEnum = pgEnum('storage_provider', ['google_photos', 'supabase', 'local', 'database']);
 export const uploadStatusEnum = pgEnum('upload_status', ['pending', 'success', 'failed']);
+export const musicRequestStatusEnum = pgEnum('music_request_status', ['pending', 'approved', 'rejected', 'played']);
 
 // Users table
 export const users = pgTable(
@@ -69,6 +70,7 @@ export const events = pgTable(
     endDate: timestamp('end_date', { withTimezone: true }),
     storageMode: storageModeEnum('storage_mode').default('fallback').notNull(),
     isActive: boolean('is_active').default(true).notNull(),
+    enableDjPlaylist: boolean('enable_dj_playlist').default(false).notNull(),
     photoCount: integer('photo_count').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -108,6 +110,36 @@ export const photos = pgTable(
   ]
 );
 
+// Music Requests table — DJ playlist where guests submit song requests
+export const musicRequests = pgTable(
+  'music_requests',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    // Spotify track ID for deduplication and rich metadata
+    spotifyTrackId: varchar('spotify_track_id', { length: 64 }),
+    title: varchar('title', { length: 255 }).notNull(),
+    artist: varchar('artist', { length: 255 }).notNull(),
+    albumName: varchar('album_name', { length: 255 }),
+    albumArtUrl: text('album_art_url'),
+    spotifyPreviewUrl: text('spotify_preview_url'),
+    guestName: varchar('guest_name', { length: 100 }),
+    status: musicRequestStatusEnum('status').default('pending').notNull(),
+    position: integer('position').default(0).notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('music_requests_event_id_idx').on(table.eventId),
+    index('music_requests_status_idx').on(table.status),
+    // Prevent the same Spotify track from being added twice to an event
+    uniqueIndex('music_requests_event_spotify_unique')
+      .on(table.eventId, table.spotifyTrackId)
+      .where(sql`${table.spotifyTrackId} IS NOT NULL`),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   events: many(events),
@@ -119,11 +151,19 @@ export const eventsRelations = relations(events, ({ one, many }) => ({
     references: [users.id],
   }),
   photos: many(photos),
+  musicRequests: many(musicRequests),
 }));
 
 export const photosRelations = relations(photos, ({ one }) => ({
   event: one(events, {
     fields: [photos.eventId],
+    references: [events.id],
+  }),
+}));
+
+export const musicRequestsRelations = relations(musicRequests, ({ one }) => ({
+  event: one(events, {
+    fields: [musicRequests.eventId],
     references: [events.id],
   }),
 }));
@@ -137,3 +177,6 @@ export type NewEvent = typeof events.$inferInsert;
 
 export type Photo = typeof photos.$inferSelect;
 export type NewPhoto = typeof photos.$inferInsert;
+
+export type MusicRequest = typeof musicRequests.$inferSelect;
+export type NewMusicRequest = typeof musicRequests.$inferInsert;

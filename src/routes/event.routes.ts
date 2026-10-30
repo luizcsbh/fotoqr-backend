@@ -71,6 +71,7 @@ router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next:
         endDate: event.endDate,
         storageMode: event.storageMode,
         isActive: event.isActive,
+        enableDjPlaylist: event.enableDjPlaylist,
         photoCount: event.photoCount,
         publicUrl: event.publicUrl,
         qrCodeUrl: event.qrCodeUrl,
@@ -111,6 +112,50 @@ router.patch('/:id/toggle', authenticateToken, async (req: Request, res: Respons
     res.status(200).json({
       success: true,
       message: updatedEvent.isActive ? 'Evento ativado com sucesso.' : 'Evento pausado com sucesso.',
+      data: updatedEvent,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PATCH /api/events/:id/dj-playlist
+ * Turns the guests' DJ song request playlist on or off.
+ * Body: { enabled?: boolean } — toggles the current value when omitted.
+ */
+router.patch('/:id/dj-playlist', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawId = req.params.id as string;
+    let eventId: number | null = /^\d+$/.test(rawId) ? parseInt(rawId, 10) : null;
+
+    if (!eventId) {
+      const event = await eventService.getEventByUuid(rawId);
+      eventId = event?.id ?? null;
+    }
+
+    if (!eventId) {
+      res.status(404).json({
+        success: false,
+        error: 'Evento não encontrado.',
+      });
+      return;
+    }
+
+    const enabled = req.body?.enabled;
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      res.status(400).json({ success: false, error: 'O campo "enabled" deve ser verdadeiro ou falso.' });
+      return;
+    }
+
+    const userId = req.user!.id;
+    const updatedEvent = await eventService.setDjPlaylistEnabled(eventId, userId, enabled);
+
+    res.status(200).json({
+      success: true,
+      message: updatedEvent.enableDjPlaylist
+        ? 'Playlist do DJ ativada. Os convidados já podem pedir músicas.'
+        : 'Playlist do DJ desativada.',
       data: updatedEvent,
     });
   } catch (error) {
