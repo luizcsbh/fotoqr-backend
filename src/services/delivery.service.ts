@@ -249,8 +249,8 @@ export class DeliveryService {
       })
       .returning();
 
-    const waToken = process.env.WHATSAPP_API_TOKEN;
-    const waPhoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const waToken = env.WHATSAPP_API_TOKEN;
+    const waPhoneId = env.WHATSAPP_PHONE_NUMBER_ID;
 
     try {
       let providerMessageId = 'wa-mock-' + Date.now();
