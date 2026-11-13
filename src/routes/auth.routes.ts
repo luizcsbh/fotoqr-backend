@@ -8,6 +8,8 @@ import {
   changePassword,
   updateAvatar,
   getUserAvatar,
+  requestPasswordReset,
+  resetPasswordWithToken,
 } from '../services/auth.service.js';
 import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
@@ -169,6 +171,43 @@ router.post('/logout', (req: Request, res: Response) => {
       success: true,
       message: 'Desconectado com sucesso.',
     });
+  }
+});
+
+/**
+ * POST /api/auth/forgot-password
+ * Requests a password reset link by e-mail.
+ */
+router.post('/forgot-password', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email } = req.body ?? {};
+    await requestPasswordReset(email);
+    // Always respond with success (anti-enumeration)
+    res.status(200).json({
+      success: true,
+      message: 'Se este e-mail estiver cadastrado, você receberá as instruções em breve.',
+    });
+  } catch (error: any) {
+    // SMTP errors should propagate so the user knows to fix server config
+    next(error);
+  }
+});
+
+/**
+ * POST /api/auth/reset-password
+ * Resets the password using the token from the email link.
+ */
+router.post('/reset-password', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { email, token, newPassword } = req.body ?? {};
+    if (!email || !token || !newPassword) {
+      res.status(400).json({ success: false, error: 'Informe o e-mail, o token e a nova senha.' });
+      return;
+    }
+    await resetPasswordWithToken(email, token, newPassword);
+    res.status(200).json({ success: true, message: 'Senha redefinida com sucesso! Faça login com sua nova senha.' });
+  } catch (error) {
+    next(error);
   }
 });
 

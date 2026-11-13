@@ -1,13 +1,14 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { randomUUID, randomBytes } from 'node:crypto';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import sharp from 'sharp';
 import { db } from '../config/database.js';
-import { users, User } from '../models/schema.js';
+import { users, User, passwordResetTokens } from '../models/schema.js';
 import { env } from '../config/env.js';
 import { AuthUser } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
+import { deliveryService } from './delivery.service.js';
 
 export interface PasswordRegistration {
   name: string;
@@ -238,4 +239,171 @@ export function verifyJWT(token: string): AuthUser {
   } catch (error) {
     throw new Error('Token JWT inválido ou expirado.');
   }
+}
+
+/**
+ * Requests a password reset: generates a secure token, stores it hashed, sends email.
+ * Always returns void to prevent email enumeration.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  validateEmail(email);
+  const normalizedEmail = normalizeEmail(email);
+
+  const [user] = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(and(sql`lower(${users.email}) = ${normalizedEmail}`, sql`${users.passwordHash} IS NOT NULL`))
+    .limit(1);
+
+  // Always succeed silently (anti-enumeration)
+  if (!user) return;
+
+  // Invalidate any previous tokens for this user
+  await db
+    .delete(passwordResetTokens)
+    .where(eq(passwordResetTokens.userId, user.id));
+
+  // Generate a 48-byte secure random token
+  const rawToken = randomBytes(48).toString('hex');
+  const tokenHash = await bcrypt.hash(rawToken, 10);
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+  await db.insert(passwordResetTokens).values({
+    userId: user.id,
+    tokenHash,
+    expiresAt,
+  });
+
+  const resetUrl = `${env.FRONTEND_URL}/redefinir-senha?token=${rawToken}&email=${encodeURIComponent(user.email)}`;
+
+  // Send email
+  try {
+    const transporter = deliveryService.getMailTransporter();
+    await transporter.sendMail({
+      from: env.SMTP_FROM,
+      to: user.email,
+      subject: 'Redefinição de Senha — FotoQR',
+      html: generatePasswordResetEmailHtml(user.name, resetUrl),
+    });
+  } catch (err) {
+    logger.error('Falha ao enviar e-mail de recuperação de senha:', err);
+    throw new AuthServiceError(
+      'Não foi possível enviar o e-mail de recuperação. Verifique a configuração SMTP no servidor.',
+      500
+    );
+  }
+}
+
+function generatePasswordResetEmailHtml(name: string, resetUrl: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><title>Redefinição de Senha — FotoQR</title></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 560px; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #4f46e5, #10b981); padding: 32px 24px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 700;">🔐 Redefinição de Senha</h1>
+            <p style="color: #c7d2fe; margin: 8px 0 0 0; font-size: 14px;">FotoQR Eventos</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 24px;">
+            <p style="font-size: 16px; margin: 0 0 12px;">Olá, <strong>${name}</strong>!</p>
+            <p style="font-size: 15px; color: #475569; line-height: 1.6; margin: 0 0 24px;">
+              Recebemos uma solicitação para redefinir a senha da sua conta no FotoQR.<br>
+              Clique no botão abaixo para criar uma nova senha:
+            </p>
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="${resetUrl}" target="_blank" style="background-color: #4f46e5; color: #ffffff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 15px; display: inline-block;">
+                Redefinir minha senha
+              </a>
+            </div>
+            <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 14px 16px; border-radius: 6px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 13px; color: #92400e;">
+                ⏱ Este link expira em <strong>1 hora</strong>.<br>
+                Se você não solicitou a redefinição, ignore este e-mail com segurança.
+              </p>
+            </div>
+            <p style="font-size: 12px; color: #94a3b8; margin: 20px 0 0;">
+              Ou copie e cole este link no seu navegador:<br>
+              <span style="word-break: break-all; color: #4f46e5;">${resetUrl}</span>
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f8fafc; padding: 16px 24px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="font-size: 12px; color: #94a3b8; margin: 0;">
+              Enviado com segurança pela plataforma <strong>FotoQR</strong>.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+}
+
+/**
+ * Validates the reset token and sets a new password.
+ */
+export async function resetPasswordWithToken(
+  email: string,
+  rawToken: string,
+  newPassword: string
+): Promise<void> {
+  validateEmail(email);
+  validatePassword(newPassword);
+  const normalizedEmail = normalizeEmail(email);
+
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(sql`lower(${users.email}) = ${normalizedEmail}`, sql`${users.passwordHash} IS NOT NULL`))
+    .limit(1);
+
+  if (!user) {
+    throw new AuthServiceError('Token inválido ou expirado.', 400);
+  }
+
+  // Find valid, unused token
+  const [tokenRecord] = await db
+    .select()
+    .from(passwordResetTokens)
+    .where(
+      and(
+        eq(passwordResetTokens.userId, user.id),
+        gt(passwordResetTokens.expiresAt, new Date()),
+        sql`${passwordResetTokens.usedAt} IS NULL`
+      )
+    )
+    .limit(1);
+
+  if (!tokenRecord) {
+    throw new AuthServiceError('Token inválido ou expirado.', 400);
+  }
+
+  // Compare the raw token against the stored hash
+  const isValid = await bcrypt.compare(rawToken, tokenRecord.tokenHash);
+  if (!isValid) {
+    throw new AuthServiceError('Token inválido ou expirado.', 400);
+  }
+
+  // Mark token as used
+  await db
+    .update(passwordResetTokens)
+    .set({ usedAt: new Date() })
+    .where(eq(passwordResetTokens.id, tokenRecord.id));
+
+  // Set new password
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await db
+    .update(users)
+    .set({ passwordHash, updatedAt: new Date() })
+    .where(eq(users.id, user.id));
+
+  // Invalidate remaining tokens
+  await db
+    .delete(passwordResetTokens)
+    .where(eq(passwordResetTokens.userId, user.id));
 }
