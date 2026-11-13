@@ -92,7 +92,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const eventId = req.eventAccess!.eventId;
-      let { coverImage, backgroundImage } = req.body || {};
+      let { coverImage, backgroundImage, location, startAt } = req.body || {};
 
       const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
 
@@ -108,13 +108,20 @@ router.post(
         backgroundImage = `data:${file.mimetype};base64,${base64}`;
       }
 
+      const updateData: Record<string, any> = {
+        updatedAt: new Date(),
+      };
+      if (coverImage !== undefined) updateData.coverImage = coverImage;
+      if (backgroundImage !== undefined) updateData.backgroundImage = backgroundImage;
+      if (location !== undefined) updateData.location = location;
+      if (startAt !== undefined) {
+        updateData.startAt = startAt ? new Date(startAt) : null;
+        updateData.startDate = updateData.startAt;
+      }
+
       const [updated] = await db
         .update(events)
-        .set({
-          coverImage: coverImage !== undefined ? coverImage : undefined,
-          backgroundImage: backgroundImage !== undefined ? backgroundImage : undefined,
-          updatedAt: new Date(),
-        })
+        .set(updateData)
         .where(eq(events.id, eventId))
         .returning();
 
@@ -124,6 +131,8 @@ router.post(
         data: {
           coverImage: updated.coverImage,
           backgroundImage: updated.backgroundImage,
+          location: updated.location,
+          startAt: updated.startAt,
         },
       });
     } catch (error) {
