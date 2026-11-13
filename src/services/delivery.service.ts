@@ -6,7 +6,7 @@ import {
   eventGuests,
   events,
 } from '../models/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray, ne } from 'drizzle-orm';
 import { invitationService } from './invitation.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
@@ -25,16 +25,16 @@ export class DeliveryService {
    * If SMTP is configured in env, uses it. Otherwise falls back to mock/stream transporter.
    */
   getMailTransporter() {
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+    const smtpHost = env.SMTP_HOST;
+    const smtpUser = env.SMTP_USER;
+    const smtpPass = env.SMTP_PASS;
+    const smtpPort = env.SMTP_PORT;
 
     if (smtpHost && smtpUser && smtpPass) {
       return nodemailer.createTransport({
         host: smtpHost,
         port: smtpPort,
-        secure: smtpPort === 465,
+        secure: env.SMTP_SECURE,
         auth: {
           user: smtpUser,
           pass: smtpPass,
@@ -162,7 +162,7 @@ export class DeliveryService {
       }
 
       const info = await transporter.sendMail({
-        from: process.env.SMTP_FROM || 'FotoQR Convites <nao-responder@fotoqr.com.br>',
+        from: env.SMTP_FROM,
         to: guest.email,
         subject: `Seu convite para ${event.title}`,
         html,
@@ -342,12 +342,12 @@ export class DeliveryService {
       targets = await db
         .select({ id: eventInvitations.id })
         .from(eventInvitations)
-        .where(and(eq(eventInvitations.eventId, eventId), sql`${eventInvitations.id} IN ${invitationIds}`));
+        .where(and(eq(eventInvitations.eventId, eventId), inArray(eventInvitations.id, invitationIds)));
     } else {
       targets = await db
         .select({ id: eventInvitations.id })
         .from(eventInvitations)
-        .where(and(eq(eventInvitations.eventId, eventId), sql`${eventInvitations.status} != 'cancelled'`));
+        .where(and(eq(eventInvitations.eventId, eventId), ne(eventInvitations.status, 'cancelled')));
     }
 
     let sent = 0;

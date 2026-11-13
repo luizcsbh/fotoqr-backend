@@ -15,6 +15,16 @@ export interface EnvConfig {
   MAX_FILE_SIZE_MB: number;
   MAX_FILES_PER_UPLOAD: number;
   MAX_UPLOADS_PER_MINUTE: number;
+  // Email (SMTP) — optional; falls back to stream transport when absent
+  SMTP_HOST: string | undefined;
+  SMTP_PORT: number;
+  SMTP_SECURE: boolean;
+  SMTP_USER: string | undefined;
+  SMTP_PASS: string | undefined;
+  SMTP_FROM: string;
+  // WhatsApp Cloud API — optional; falls back to log-only mode when absent
+  WHATSAPP_API_TOKEN: string | undefined;
+  WHATSAPP_PHONE_NUMBER_ID: string | undefined;
 }
 
 const parseNumber = (val: string | undefined, defaultVal: number): number => {
@@ -41,6 +51,16 @@ export const env: EnvConfig = {
   MAX_FILE_SIZE_MB: parseNumber(process.env.MAX_FILE_SIZE_MB, 10),
   MAX_FILES_PER_UPLOAD: parseNumber(process.env.MAX_FILES_PER_UPLOAD, 20),
   MAX_UPLOADS_PER_MINUTE: parseNumber(process.env.MAX_UPLOADS_PER_MINUTE, 60),
+  // Email (SMTP)
+  SMTP_HOST: process.env.SMTP_HOST || undefined,
+  SMTP_PORT: parseNumber(process.env.SMTP_PORT, 587),
+  SMTP_SECURE: process.env.SMTP_SECURE === 'true',
+  SMTP_USER: process.env.SMTP_USER || undefined,
+  SMTP_PASS: process.env.SMTP_PASS || undefined,
+  SMTP_FROM: process.env.SMTP_FROM || '"FotoQR Eventos" <noreply@fotoqr.app>',
+  // WhatsApp Cloud API
+  WHATSAPP_API_TOKEN: process.env.WHATSAPP_API_TOKEN || undefined,
+  WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || undefined,
 };
 
 export default env;
