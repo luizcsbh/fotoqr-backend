@@ -10,6 +10,7 @@ import {
 } from '../models/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import { logAuditEvent } from './audit.service.js';
+import { getCheckinDeadline, CHECKIN_GRACE_HOURS } from '../utils/eventWindow.js';
 
 export type ValidationStatus =
   | 'VALIDO'
@@ -154,9 +155,12 @@ export class CheckinService {
         };
       }
 
-      // Check expiration
+      // Check expiration against the event's CURRENT end (+ grace period for late arrivals).
+      // invitation.valid_until is ignored: older invitations stored a copy of the event end taken
+      // when they were issued, which went stale whenever the event dates changed.
       const now = new Date();
-      if (invitation.valid_until && new Date(invitation.valid_until) < now) {
+      const deadline = targetEvent ? getCheckinDeadline(targetEvent) : null;
+      if (deadline && deadline < now) {
         await tx.insert(eventCheckins).values({
           eventId,
           invitationId: invitation.id,
@@ -170,7 +174,7 @@ export class CheckinService {
           status: 'EXPIRADO',
           allowed: false,
           color: 'laranja',
-          message: 'Este convite está fora do período de validade.',
+          message: `O evento já terminou (convites valem até ${CHECKIN_GRACE_HOURS}h após o término).`,
           guest: guest ? { id: guest.id, name: guest.name, category: guest.category } : undefined,
         };
       }

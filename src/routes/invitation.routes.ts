@@ -326,12 +326,14 @@ router.post('/events/:id/invitations', authenticateToken, requireEventAdmin, asy
     const eventId = req.eventAccess!.eventId;
     const { guestId, bulk } = req.body;
 
+    const warning = await invitationService.getEventEndedWarning(eventId);
+
     if (bulk) {
       const result = await invitationService.generateBulkInvitations(eventId, req.user!.id, getIp(req));
       res.status(201).json({
         success: true,
         message: `${result.generated} novos convites gerados com sucesso.`,
-        data: result,
+        data: { ...result, warning },
       });
       return;
     }
@@ -346,7 +348,7 @@ router.post('/events/:id/invitations', authenticateToken, requireEventAdmin, asy
     res.status(201).json({
       success: true,
       message: 'Convite gerado com sucesso.',
-      data: invitation,
+      data: { ...invitation, warning },
     });
   } catch (error) {
     next(error);
@@ -450,11 +452,12 @@ router.post('/invitations/:id/resend', authenticateToken, async (req: Request, r
     }
 
     const reissued = await invitationService.reissueInvitation(invitationId, req.user!.id, getIp(req));
+    const warning = await invitationService.getEventEndedWarning(invitation.eventId);
 
     res.status(200).json({
       success: true,
       message: 'Novo convite reemitido com sucesso.',
-      data: reissued,
+      data: { ...reissued, warning },
     });
   } catch (error) {
     next(error);

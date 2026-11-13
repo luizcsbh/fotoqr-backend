@@ -12,6 +12,7 @@ import { eq, and, ne, inArray } from 'drizzle-orm';
 import { generateQRCode } from '../utils/qrcode.js';
 import { env } from '../config/env.js';
 import { logAuditEvent } from './audit.service.js';
+import { isEventOver } from '../utils/eventWindow.js';
 import PDFDocument from 'pdfkit';
 
 export interface IssuedInvitation {
@@ -164,8 +165,11 @@ export class InvitationService {
         status: 'pending',
         maxEntries,
         usedEntries: 0,
-        validFrom: toDate(options?.validFrom) || event.startAt || event.startDate || null,
-        validUntil: toDate(options?.validUntil) || event.endAt || event.endDate || null,
+        // Only an explicit validity is stored. By default the invitation follows the event's current
+        // dates at check-in (copying the end time here made invitations of an event whose dates were
+        // later changed — or already over — come out expired)
+        validFrom: toDate(options?.validFrom),
+        validUntil: toDate(options?.validUntil),
         issuedAt: now,
       })
       .returning();
@@ -202,6 +206,20 @@ export class InvitationService {
       issuedAt: newInvite.issuedAt,
       revokedAt: newInvite.revokedAt,
     };
+  }
+
+  /**
+   * Warning shown when invitations are generated for an event that is already over
+   * (they would be refused at the gate until the event dates are fixed). Null when all is fine.
+   */
+  async getEventEndedWarning(eventId: number): Promise<string | null> {
+    const [event] = await db
+      .select({ endAt: events.endAt, endDate: events.endDate })
+      .from(events)
+      .where(eq(events.id, eventId))
+      .limit(1);
+    if (!event || !isEventOver(event)) return null;
+    return 'Atenção: o horário de término deste evento já passou, então a portaria vai recusar estes convites como expirados. Ajuste a data de término do evento.';
   }
 
   /**
@@ -296,16 +314,13 @@ export class InvitationService {
     // Revoke old invitation
     await this.revokeInvitation(invitationId, userId, ipAddress);
 
-    // Create new invitation for the same guest
+    // Create new invitation for the same guest. The old validity is not carried over: older
+    // invitations stored a copy of the event end, which would make the new one expired as well
     const newInvite = await this.createInvitation(
       oldInvite.eventId,
       oldInvite.guestId,
       userId,
-      {
-        maxEntries: oldInvite.maxEntries,
-        validFrom: oldInvite.validFrom || undefined,
-        validUntil: oldInvite.validUntil || undefined,
-      },
+      { maxEntries: oldInvite.maxEntries },
       ipAddress
     );
 
