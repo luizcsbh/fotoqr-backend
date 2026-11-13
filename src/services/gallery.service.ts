@@ -123,17 +123,18 @@ export class GalleryService {
       filterCondition = and(filterCondition, inArray(photos.id, photoIds));
     }
 
+    // Only metadata here: the binaries are loaded one at a time while zipping, so a large album
+    // does not have to fit in memory all at once
     const eventPhotos = await db
       .select({
         id: photos.id,
         originalFilename: photos.originalFilename,
-        storedFilename: photos.storedFilename,
         storagePath: photos.storagePath,
-        storageProvider: photos.storageProvider,
-        fileData: photos.fileData,
+        mimeType: photos.mimeType,
       })
       .from(photos)
-      .where(filterCondition);
+      .where(filterCondition)
+      .orderBy(photos.uploadedAt);
 
     const archive = archiver('zip', {
       zlib: { level: 6 },
@@ -149,34 +150,71 @@ export class GalleryService {
       logger.error('Erro na geração do arquivo ZIP:', err);
     });
 
+    // Set when the route aborts the archive because the client went away
+    const isAborted = () => Boolean((archive as unknown as { _state?: { aborted?: boolean } })._state?.aborted);
+
+    // Waits until the archive has consumed the previous entry before loading the next photo
+    const waitForEntry = () =>
+      new Promise<void>((resolve) => {
+        const done = () => {
+          archive.off('entry', done);
+          archive.off('error', done);
+          archive.off('close', done);
+          archive.off('end', done);
+          resolve();
+        };
+        archive.once('entry', done);
+        archive.once('error', done);
+        archive.once('close', done);
+        archive.once('end', done);
+      });
+
     // Populate the archive asynchronously
     (async () => {
       try {
         const usedNames = new Set<string>();
 
         for (let i = 0; i < eventPhotos.length; i++) {
+          if (isAborted()) return;
           const photo = eventPhotos[i];
-          let fileName = photo.originalFilename || `foto_${i + 1}.jpg`;
 
-          // Handle duplicate file names in archive
-          if (usedNames.has(fileName)) {
-            const ext = path.extname(fileName);
-            const base = path.basename(fileName, ext);
-            fileName = `${base}_${i + 1}${ext}`;
+          // Entry names come from guests' devices: keep only the base name (no "../" or folders)
+          // and use the extension of the stored file — photos kept in the database are JPEG,
+          // even when the guest sent a .heic/.png
+          const rawName = path.basename((photo.originalFilename || '').replace(/\\/g, '/')).trim();
+          const storedExt = photo.mimeType === 'image/jpeg' ? '.jpg' : path.extname(rawName) || '.jpg';
+          const base =
+            path.basename(rawName, path.extname(rawName)).replace(/[\u0000-\u001f<>:"|?*]/g, '_') ||
+            `foto_${i + 1}`;
+          let fileName = `${base}${storedExt}`;
+
+          // Handle duplicate file names in archive (case-insensitive, as on Windows/macOS)
+          if (usedNames.has(fileName.toLowerCase())) {
+            fileName = `${base}_${i + 1}${storedExt}`;
           }
-          usedNames.add(fileName);
+          usedNames.add(fileName.toLowerCase());
 
-          if (photo.fileData) {
-            archive.append(photo.fileData, { name: fileName });
-          } else if (photo.storagePath) {
+          const [row] = await db
+            .select({ fileData: photos.fileData })
+            .from(photos)
+            .where(eq(photos.id, photo.id))
+            .limit(1);
+
+          if (row?.fileData) {
+            const entryAdded = waitForEntry();
+            archive.append(row.fileData, { name: fileName });
+            await entryAdded;
+          } else if (photo.storagePath && photo.storagePath !== 'database') {
             const fullLocalPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);
             if (fs.existsSync(fullLocalPath)) {
+              const entryAdded = waitForEntry();
               archive.file(fullLocalPath, { name: fileName });
+              await entryAdded;
             }
           }
         }
 
-        await archive.finalize();
+        if (!isAborted()) await archive.finalize();
       } catch (err) {
         logger.error('Erro ao finalizar arquivo ZIP:', err);
         archive.abort();

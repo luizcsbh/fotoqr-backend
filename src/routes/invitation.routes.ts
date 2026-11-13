@@ -1,10 +1,10 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
-import { authenticateToken, optionalAuth } from '../middleware/auth.js';
+import { authenticateToken } from '../middleware/auth.js';
 import {
   requireEventAdmin,
   requireEventReader,
-  resolveEventId,
+  canAdminEvent,
 } from '../middleware/rbac.js';
 import { guestService } from '../services/guest.service.js';
 import { invitationService } from '../services/invitation.service.js';
@@ -22,6 +22,36 @@ const uploadDoc = multer({
   limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
 });
 
+// Cover / background images become data: URLs shown to every guest, so only real images are accepted
+const COVER_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const uploadCover = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 2 },
+  fileFilter: (_req, file, callback) => {
+    if (COVER_IMAGE_TYPES.includes(file.mimetype.toLowerCase())) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Formato de arquivo inválido. Use uma imagem JPG, PNG, WEBP ou GIF.'));
+  },
+});
+
+const REPORT_TYPES = ['guests', 'checkins', 'absent', 'deliveries'] as const;
+const REPORT_FORMATS = ['xlsx', 'csv'] as const;
+
+/** Positive integer from a route parameter, or null. */
+const parseId = (raw: unknown): number | null => {
+  const text = String(raw ?? '');
+  return /^\d+$/.test(text) ? parseInt(text, 10) : null;
+};
+
+/** Keeps only valid numeric invitation ids from a request body (undefined = "all"). */
+const parseIdList = (raw: unknown): number[] | undefined => {
+  if (!Array.isArray(raw)) return undefined;
+  const ids = raw.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0);
+  return ids.length > 0 ? ids : undefined;
+};
+
 // Helper to extract IP
 const getIp = (req: Request) => req.ip || req.socket.remoteAddress;
 
@@ -38,7 +68,7 @@ router.put('/events/:id', authenticateToken, requireEventAdmin, async (req: Requ
     const eventId = req.eventAccess!.eventId;
     const { title, name, description, category, startAt, endAt, location, capacity, status, maxEntriesPerInvitation } = req.body;
 
-    const eventTitle = (title || name || '').trim();
+    const eventTitle = String(title || name || '').trim();
     if (eventTitle && eventTitle.length < 2) {
       res.status(400).json({ success: false, error: 'O nome do evento deve ter no mínimo 2 caracteres.' });
       return;
@@ -85,7 +115,7 @@ router.post(
   '/events/:id/cover',
   authenticateToken,
   requireEventAdmin,
-  uploadDoc.fields([
+  uploadCover.fields([
     { name: 'coverFile', maxCount: 1 },
     { name: 'bgFile', maxCount: 1 },
   ]),
@@ -230,8 +260,8 @@ router.get('/events/:id/guests', authenticateToken, requireEventAdmin, async (re
  */
 router.put('/guests/:id', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const guestId = parseInt(req.params.id as string, 10);
-    if (isNaN(guestId)) {
+    const guestId = parseId(req.params.id);
+    if (guestId === null) {
       res.status(400).json({ success: false, error: 'ID de convidado inválido.' });
       return;
     }
@@ -242,10 +272,8 @@ router.put('/guests/:id', authenticateToken, async (req: Request, res: Response,
       return;
     }
 
-    // Verify user is admin for this event
-    const eventId = guest.eventId;
-    const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
-    if (!event || (event.userId !== req.user!.id && req.user!.role !== 'platform_admin')) {
+    // Owner, co-admin or platform admin of the guest's event
+    if (!(await canAdminEvent(req.user, guest.eventId))) {
       res.status(403).json({ success: false, error: 'Acesso negado para gerenciar este convidado.' });
       return;
     }
@@ -268,8 +296,13 @@ router.put('/guests/:id', authenticateToken, async (req: Request, res: Response,
  */
 router.delete('/events/:id/guests/:guestId', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const guestId = parseInt(req.params.guestId as string, 10);
-    await guestService.deleteGuest(guestId, req.user!.id, getIp(req));
+    const guestId = parseId(req.params.guestId);
+    if (guestId === null) {
+      res.status(400).json({ success: false, error: 'ID de convidado inválido.' });
+      return;
+    }
+    // Scoped to the event checked by requireEventAdmin, so guests of other events cannot be deleted
+    await guestService.deleteGuest(req.eventAccess!.eventId, guestId, req.user!.id, getIp(req));
 
     res.status(200).json({
       success: true,
@@ -366,15 +399,18 @@ router.get('/events/:id/invitations', authenticateToken, requireEventAdmin, asyn
  */
 router.post('/invitations/:id/revoke', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const invitationId = parseInt(req.params.id as string, 10);
+    const invitationId = parseId(req.params.id);
+    if (invitationId === null) {
+      res.status(400).json({ success: false, error: 'ID de convite inválido.' });
+      return;
+    }
     const [invitation] = await db.select().from(eventInvitations).where(eq(eventInvitations.id, invitationId)).limit(1);
     if (!invitation) {
       res.status(404).json({ success: false, error: 'Convite não encontrado.' });
       return;
     }
 
-    const [event] = await db.select().from(events).where(eq(events.id, invitation.eventId)).limit(1);
-    if (!event || (event.userId !== req.user!.id && req.user!.role !== 'platform_admin')) {
+    if (!(await canAdminEvent(req.user, invitation.eventId))) {
       res.status(403).json({ success: false, error: 'Acesso negado para cancelar este convite.' });
       return;
     }
@@ -397,15 +433,18 @@ router.post('/invitations/:id/revoke', authenticateToken, async (req: Request, r
  */
 router.post('/invitations/:id/resend', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const invitationId = parseInt(req.params.id as string, 10);
+    const invitationId = parseId(req.params.id);
+    if (invitationId === null) {
+      res.status(400).json({ success: false, error: 'ID de convite inválido.' });
+      return;
+    }
     const [invitation] = await db.select().from(eventInvitations).where(eq(eventInvitations.id, invitationId)).limit(1);
     if (!invitation) {
       res.status(404).json({ success: false, error: 'Convite não encontrado.' });
       return;
     }
 
-    const [event] = await db.select().from(events).where(eq(events.id, invitation.eventId)).limit(1);
-    if (!event || (event.userId !== req.user!.id && req.user!.role !== 'platform_admin')) {
+    if (!(await canAdminEvent(req.user, invitation.eventId))) {
       res.status(403).json({ success: false, error: 'Acesso negado para reemitir este convite.' });
       return;
     }
@@ -424,13 +463,54 @@ router.post('/invitations/:id/resend', authenticateToken, async (req: Request, r
 
 /**
  * GET /api/invitations/:id/pdf
- * Generates and downloads invitation in PDF.
+ * Generates and downloads invitation in PDF (event admins only: the PDF carries the entry QR code,
+ * and invitation ids are sequential, so it must never be served by id to anonymous users).
  */
-router.get('/invitations/:id/pdf', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/invitations/:id/pdf', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const invitationId = parseInt(req.params.id as string, 10);
+    const invitationId = parseId(req.params.id);
+    if (invitationId === null) {
+      res.status(400).json({ success: false, error: 'ID de convite inválido.' });
+      return;
+    }
+
+    const [invitation] = await db
+      .select({ eventId: eventInvitations.eventId })
+      .from(eventInvitations)
+      .where(eq(eventInvitations.id, invitationId))
+      .limit(1);
+    if (!invitation) {
+      res.status(404).json({ success: false, error: 'Convite não encontrado.' });
+      return;
+    }
+    if (!(await canAdminEvent(req.user, invitation.eventId))) {
+      res.status(403).json({ success: false, error: 'Acesso negado para baixar este convite.' });
+      return;
+    }
+
     const pdfBuffer = await invitationService.generatePDF(invitationId);
 
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="convite-${invitationId}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/invitations/public/:token/pdf
+ * Public PDF download for the holder of the invitation link.
+ */
+router.get('/invitations/public/:token/pdf', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const invitationId = await invitationService.findInvitationIdByToken(req.params.token as string);
+    if (!invitationId) {
+      res.status(404).json({ success: false, error: 'Convite não encontrado ou inválido.' });
+      return;
+    }
+
+    const pdfBuffer = await invitationService.generatePDF(invitationId);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="convite-${invitationId}.pdf"`);
     res.send(pdfBuffer);
@@ -488,7 +568,11 @@ router.get('/events/:id/deliveries/config', authenticateToken, requireEventAdmin
  */
 router.post('/invitations/:id/mark-sent', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const invitationId = parseInt(req.params.id as string, 10);
+    const invitationId = parseId(req.params.id);
+    if (invitationId === null) {
+      res.status(400).json({ success: false, error: 'ID de convite inválido.' });
+      return;
+    }
     const { channel, destination } = req.body || {};
 
     if (!channel || !['whatsapp', 'email'].includes(channel)) {
@@ -502,8 +586,7 @@ router.post('/invitations/:id/mark-sent', authenticateToken, async (req: Request
       return;
     }
 
-    const [event] = await db.select().from(events).where(eq(events.id, invitation.eventId)).limit(1);
-    if (!event || (event.userId !== req.user!.id && req.user!.role !== 'platform_admin')) {
+    if (!(await canAdminEvent(req.user, invitation.eventId))) {
       res.status(403).json({ success: false, error: 'Acesso negado para gerenciar este convite.' });
       return;
     }
@@ -526,13 +609,13 @@ router.post('/invitations/:id/mark-sent', authenticateToken, async (req: Request
 router.post('/events/:id/deliveries/email', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const eventId = req.eventAccess!.eventId;
-    const { invitationIds, attachPdf } = req.body;
+    const { invitationIds, attachPdf } = req.body ?? {};
 
     const result = await deliveryService.dispatchBatch(
       eventId,
       req.user!.id,
       'email',
-      invitationIds,
+      parseIdList(invitationIds),
       Boolean(attachPdf),
       getIp(req)
     );
@@ -563,13 +646,13 @@ router.post('/events/:id/deliveries/email', authenticateToken, requireEventAdmin
 router.post('/events/:id/deliveries/whatsapp', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const eventId = req.eventAccess!.eventId;
-    const { invitationIds } = req.body;
+    const { invitationIds } = req.body ?? {};
 
     const result = await deliveryService.dispatchBatch(
       eventId,
       req.user!.id,
       'whatsapp',
-      invitationIds,
+      parseIdList(invitationIds),
       false,
       getIp(req)
     );
@@ -631,7 +714,11 @@ router.post('/events/:id/readers', authenticateToken, requireEventAdmin, async (
 router.delete('/events/:id/readers/:userId', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const eventId = req.eventAccess!.eventId;
-    const readerUserId = parseInt(req.params.userId as string, 10);
+    const readerUserId = parseId(req.params.userId);
+    if (readerUserId === null) {
+      res.status(400).json({ success: false, error: 'ID de usuário inválido.' });
+      return;
+    }
 
     await checkinService.removeReader(eventId, readerUserId, req.user!.id, getIp(req));
 
@@ -771,13 +858,21 @@ router.get('/events/:id/dashboard', authenticateToken, requireEventAdmin, async 
 router.get('/events/:id/reports', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const eventId = req.eventAccess!.eventId;
-    const type = (req.query.type as any) || 'guests';
-    const format = (req.query.format as any) || 'xlsx';
+    const type = (req.query.type as string) || 'guests';
+    const format = (req.query.format as string) || 'xlsx';
+    if (!(REPORT_TYPES as readonly string[]).includes(type) || !(REPORT_FORMATS as readonly string[]).includes(format)) {
+      res.status(400).json({ success: false, error: 'Tipo ou formato de relatório inválido.' });
+      return;
+    }
 
-    const buffer = await reportService.exportReport(eventId, type, format);
+    const buffer = await reportService.exportReport(
+      eventId,
+      type as (typeof REPORT_TYPES)[number],
+      format as (typeof REPORT_FORMATS)[number]
+    );
 
     if (format === 'csv') {
-      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="relatorio-${type}-${eventId}.csv"`);
     } else {
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -797,7 +892,7 @@ router.get('/events/:id/reports', authenticateToken, requireEventAdmin, async (r
 router.get('/events/:id/audit-logs', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const eventId = req.eventAccess!.eventId;
-    const limit = parseInt(req.query.limit as string, 10) || 100;
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit as string, 10) || 100));
     const logs = await getEventAuditLogs(eventId, limit);
 
     res.status(200).json({

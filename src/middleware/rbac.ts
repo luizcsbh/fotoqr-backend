@@ -97,6 +97,17 @@ export const rbacService = {
 export const { resolveEventId, getEventAccess } = rbacService;
 
 /**
+ * True when the user may manage the event (owner, co-admin or platform admin).
+ * Used by routes addressed by guest/invitation id instead of event id.
+ */
+export async function canAdminEvent(user: { id: number; role?: string } | undefined, eventId: number): Promise<boolean> {
+  if (!user) return false;
+  if (user.role === 'platform_admin') return true;
+  const access = await rbacService.getEventAccess(user.id, eventId);
+  return access.isAdmin;
+}
+
+/**
  * Middleware: Requires platform administrator privileges.
  */
 export function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): void {
@@ -123,104 +134,112 @@ export function requirePlatformAdmin(req: Request, res: Response, next: NextFunc
  * Middleware: Requires Event Admin (Owner, Co-admin, or Platform Admin).
  */
 export async function requireEventAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
-  if (!req.user) {
-    res.status(401).json({
-      success: false,
-      error: 'Autenticação necessária.',
-    });
-    return;
-  }
+  try {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        error: 'Autenticação necessária.',
+      });
+      return;
+    }
 
-  const rawParam = (req.params.eventId || req.params.id) as string;
-  if (!rawParam) {
-    res.status(400).json({
-      success: false,
-      error: 'Identificador do evento não informado.',
-    });
-    return;
-  }
+    const rawParam = (req.params.eventId || req.params.id) as string;
+    if (!rawParam) {
+      res.status(400).json({
+        success: false,
+        error: 'Identificador do evento não informado.',
+      });
+      return;
+    }
 
-  const eventId = await rbacService.resolveEventId(rawParam);
-  if (!eventId) {
-    res.status(404).json({
-      success: false,
-      error: 'Evento não encontrado.',
-    });
-    return;
-  }
+    const eventId = await rbacService.resolveEventId(rawParam);
+    if (!eventId) {
+      res.status(404).json({
+        success: false,
+        error: 'Evento não encontrado.',
+      });
+      return;
+    }
 
-  if (req.user.role === 'platform_admin') {
-    req.eventAccess = {
-      eventId,
-      isOwner: true,
-      isAdmin: true,
-      isReader: true,
-    };
-    return next();
-  }
+    if (req.user.role === 'platform_admin') {
+      req.eventAccess = {
+        eventId,
+        isOwner: true,
+        isAdmin: true,
+        isReader: true,
+      };
+      return next();
+    }
 
-  const access = await rbacService.getEventAccess(req.user.id, eventId);
-  if (!access.isAdmin) {
-    res.status(403).json({
-      success: false,
-      error: 'Acesso negado. Você não possui permissão de administração para este evento.',
-    });
-    return;
-  }
+    const access = await rbacService.getEventAccess(req.user.id, eventId);
+    if (!access.isAdmin) {
+      res.status(403).json({
+        success: false,
+        error: 'Acesso negado. Você não possui permissão de administração para este evento.',
+      });
+      return;
+    }
 
-  req.eventAccess = access;
-  next();
+    req.eventAccess = access;
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 /**
  * Middleware: Requires Event Reader (Reader, Event Admin, or Platform Admin).
  */
 export async function requireEventReader(req: Request, res: Response, next: NextFunction): Promise<void> {
-  if (!req.user) {
-    res.status(401).json({
-      success: false,
-      error: 'Autenticação necessária.',
-    });
-    return;
-  }
+  try {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        error: 'Autenticação necessária.',
+      });
+      return;
+    }
 
-  const rawParam = (req.params.eventId || req.params.id || req.body?.eventId) as string;
-  if (!rawParam) {
-    res.status(400).json({
-      success: false,
-      error: 'Identificador do evento não informado.',
-    });
-    return;
-  }
+    const rawParam = (req.params.eventId || req.params.id || req.body?.eventId) as string;
+    if (!rawParam) {
+      res.status(400).json({
+        success: false,
+        error: 'Identificador do evento não informado.',
+      });
+      return;
+    }
 
-  const eventId = await rbacService.resolveEventId(String(rawParam));
-  if (!eventId) {
-    res.status(404).json({
-      success: false,
-      error: 'Evento não encontrado.',
-    });
-    return;
-  }
+    const eventId = await rbacService.resolveEventId(String(rawParam));
+    if (!eventId) {
+      res.status(404).json({
+        success: false,
+        error: 'Evento não encontrado.',
+      });
+      return;
+    }
 
-  if (req.user.role === 'platform_admin') {
-    req.eventAccess = {
-      eventId,
-      isOwner: true,
-      isAdmin: true,
-      isReader: true,
-    };
-    return next();
-  }
+    if (req.user.role === 'platform_admin') {
+      req.eventAccess = {
+        eventId,
+        isOwner: true,
+        isAdmin: true,
+        isReader: true,
+      };
+      return next();
+    }
 
-  const access = await rbacService.getEventAccess(req.user.id, eventId);
-  if (!access.isReader) {
-    res.status(403).json({
-      success: false,
-      error: 'Acesso negado. Você não possui permissão de leitor de QR Code para este evento.',
-    });
-    return;
-  }
+    const access = await rbacService.getEventAccess(req.user.id, eventId);
+    if (!access.isReader) {
+      res.status(403).json({
+        success: false,
+        error: 'Acesso negado. Você não possui permissão de leitor de QR Code para este evento.',
+      });
+      return;
+    }
 
-  req.eventAccess = access;
-  next();
+    req.eventAccess = access;
+    next();
+  } catch (error) {
+    next(error);
+  }
 }

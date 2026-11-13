@@ -79,13 +79,15 @@ export class CheckinService {
       cleanToken = parts[parts.length - 1].split('?')[0].split('#')[0].trim();
     }
 
-    const tokenHash = cleanToken.length === 64 ? cleanToken : this.hashToken(cleanToken);
+    // The QR code carries either the raw token or its stored hash (both 64 hex chars): match both
+    const rawCandidate = cleanToken.toLowerCase();
+    const hashedCandidate = this.hashToken(cleanToken);
 
     // Run within atomic transaction with row locking
     return await db.transaction(async (tx) => {
       // 1. Lock the invitation row for update
       const lockedRows = await tx.execute(
-        sql`SELECT * FROM event_invitations WHERE token_hash = ${tokenHash} FOR UPDATE`
+        sql`SELECT * FROM event_invitations WHERE token_hash IN (${rawCandidate}, ${hashedCandidate}) LIMIT 1 FOR UPDATE`
       );
 
       const invitation = (lockedRows.rows ? lockedRows.rows[0] : (lockedRows as any)[0]) as any;
@@ -242,6 +244,10 @@ export class CheckinService {
 
     if (typeof userEmailOrId === 'number' || /^\d+$/.test(String(userEmailOrId))) {
       targetUserId = Number(userEmailOrId);
+      const [u] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetUserId)).limit(1);
+      if (!u) {
+        throw new Error('Usuário leitor não encontrado na plataforma.');
+      }
     } else {
       const [u] = await db
         .select({ id: users.id })

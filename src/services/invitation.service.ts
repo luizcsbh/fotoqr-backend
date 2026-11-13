@@ -8,7 +8,7 @@ import {
   EventGuest,
   Event,
 } from '../models/schema.js';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, ne, inArray } from 'drizzle-orm';
 import { generateQRCode } from '../utils/qrcode.js';
 import { env } from '../config/env.js';
 import { logAuditEvent } from './audit.service.js';
@@ -33,6 +33,13 @@ export interface IssuedInvitation {
   revokedAt: Date | null;
 }
 
+/** Date from a Date or date string (request bodies send strings); null when missing/invalid. */
+const toDate = (value: unknown): Date | null => {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(String(value));
+  return isNaN(d.getTime()) ? null : d;
+};
+
 export class InvitationService {
   /**
    * Generates a cryptographically secure random token (64 hex chars).
@@ -46,6 +53,31 @@ export class InvitationService {
    */
   hashToken(token: string): string {
     return crypto.createHash('sha256').update(token.trim()).digest('hex');
+  }
+
+  /**
+   * Values to match against `token_hash` for a token taken from an invitation link.
+   * Links carry either the raw token (right after creation) or the stored hash (lists, e-mails,
+   * PDFs). Both are 64 hex chars, so the length alone cannot tell them apart: try both.
+   */
+  tokenHashCandidates(tokenOrHash: string): string[] {
+    const clean = String(tokenOrHash ?? '').trim();
+    if (!clean) return [];
+    return Array.from(new Set([clean.toLowerCase(), this.hashToken(clean)]));
+  }
+
+  /**
+   * Resolves the invitation id for a public link token (raw token or hash).
+   */
+  async findInvitationIdByToken(tokenOrHash: string): Promise<number | null> {
+    const candidates = this.tokenHashCandidates(tokenOrHash);
+    if (candidates.length === 0) return null;
+    const [row] = await db
+      .select({ id: eventInvitations.id })
+      .from(eventInvitations)
+      .where(inArray(eventInvitations.tokenHash, candidates))
+      .limit(1);
+    return row ? row.id : null;
   }
 
   /**
@@ -78,14 +110,21 @@ export class InvitationService {
       throw new Error('Evento não encontrado.');
     }
 
-    // Check if an active invitation already exists
+    // Check if an active invitation already exists (cancelled ones from earlier reissues are ignored,
+    // otherwise a guest with a cancelled invitation would get a new active one on every call)
     const [existing] = await db
       .select()
       .from(eventInvitations)
-      .where(and(eq(eventInvitations.guestId, guestId), eq(eventInvitations.eventId, eventId)))
+      .where(
+        and(
+          eq(eventInvitations.guestId, guestId),
+          eq(eventInvitations.eventId, eventId),
+          ne(eventInvitations.status, 'cancelled')
+        )
+      )
       .limit(1);
 
-    if (existing && existing.status !== 'cancelled') {
+    if (existing) {
       const inviteUrl = `${env.FRONTEND_URL}/convite/${existing.tokenHash}`;
       const qrCodeUrl = await generateQRCode(inviteUrl);
 
@@ -111,7 +150,9 @@ export class InvitationService {
     const rawToken = this.generateSecureToken();
     const tokenHash = this.hashToken(rawToken);
 
-    const maxEntries = options?.maxEntries || event.maxEntriesPerInvitation || 1;
+    const requestedMax = Number(options?.maxEntries);
+    const maxEntries =
+      Number.isInteger(requestedMax) && requestedMax > 0 ? requestedMax : event.maxEntriesPerInvitation || 1;
     const now = new Date();
 
     const [newInvite] = await db
@@ -123,8 +164,8 @@ export class InvitationService {
         status: 'pending',
         maxEntries,
         usedEntries: 0,
-        validFrom: options?.validFrom || event.startAt || event.startDate || null,
-        validUntil: options?.validUntil || event.endAt || event.endDate || null,
+        validFrom: toDate(options?.validFrom) || event.startAt || event.startDate || null,
+        validUntil: toDate(options?.validUntil) || event.endAt || event.endDate || null,
         issuedAt: now,
       })
       .returning();
@@ -285,7 +326,8 @@ export class InvitationService {
    * Fetches public invitation details by token or hash.
    */
   async getPublicInvitation(tokenOrHash: string) {
-    const hash = tokenOrHash.length === 64 ? tokenOrHash : this.hashToken(tokenOrHash);
+    const candidates = this.tokenHashCandidates(tokenOrHash);
+    if (candidates.length === 0) return null;
 
     const rows = await db
       .select({
@@ -296,7 +338,7 @@ export class InvitationService {
       .from(eventInvitations)
       .innerJoin(eventGuests, eq(eventInvitations.guestId, eventGuests.id))
       .innerJoin(events, eq(eventInvitations.eventId, events.id))
-      .where(eq(eventInvitations.tokenHash, hash))
+      .where(inArray(eventInvitations.tokenHash, candidates))
       .limit(1);
 
     if (rows.length === 0) return null;
@@ -304,7 +346,7 @@ export class InvitationService {
     const { invitation, guest, event } = rows[0];
 
     // Compute dynamic QR code (using token if supplied, or tokenHash)
-    const qrTarget = `${env.FRONTEND_URL}/convite/${tokenOrHash}`;
+    const qrTarget = `${env.FRONTEND_URL}/convite/${encodeURIComponent(tokenOrHash.trim())}`;
     const qrCodeUrl = await generateQRCode(qrTarget);
 
     return {
@@ -392,7 +434,7 @@ export class InvitationService {
       const eventDate = event.startAt || event.startDate || event.eventDate;
       if (eventDate) {
         doc.fillColor('#475569').fontSize(11).font('Helvetica')
-           .text(`Data: ${new Date(eventDate).toLocaleString('pt-BR')}`, { align: 'center' });
+           .text(`Data: ${new Date(eventDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`, { align: 'center' });
       }
 
       if (event.location) {

@@ -50,6 +50,12 @@ export class GuestService {
    * Validates guest input.
    */
   validateGuestData(data: CreateGuestDTO): void {
+    for (const key of ['name', 'email', 'phone', 'category', 'notes', 'externalId'] as const) {
+      const value = data[key];
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        throw new Error(`O campo "${key}" do convidado é inválido.`);
+      }
+    }
     if (!data.name || data.name.trim().length < 2) {
       throw new Error('O nome do convidado é obrigatório (mínimo de 2 caracteres).');
     }
@@ -203,8 +209,22 @@ export class GuestService {
       throw new Error('Convidado não encontrado.');
     }
 
-    if (data.name && data.name.trim().length < 2) {
+    for (const key of ['name', 'email', 'phone', 'category', 'notes', 'externalId'] as const) {
+      const value = data[key];
+      if (value !== undefined && value !== null && typeof value !== 'string') {
+        throw new Error(`O campo "${key}" do convidado é inválido.`);
+      }
+    }
+
+    if (data.name !== undefined && (!data.name || data.name.trim().length < 2)) {
       throw new Error('O nome do convidado deve ter pelo menos 2 caracteres.');
+    }
+
+    if (data.email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(data.email.trim())) {
+        throw new Error('E-mail informado é inválido.');
+      }
     }
 
     const normEmail = data.email !== undefined ? (data.email ? data.email.trim().toLowerCase() : null) : existing.email;
@@ -223,7 +243,7 @@ export class GuestService {
         name: data.name !== undefined ? data.name.trim() : existing.name,
         email: normEmail,
         phone: normPhone,
-        category: data.category !== undefined ? data.category.trim() : existing.category,
+        category: data.category ? data.category.trim() || existing.category : existing.category,
         notes: data.notes !== undefined ? (data.notes ? data.notes.trim() : null) : existing.notes,
         externalId: data.externalId !== undefined ? (data.externalId ? data.externalId.trim() : null) : existing.externalId,
         updatedAt: new Date(),
@@ -239,11 +259,11 @@ export class GuestService {
   /**
    * Deletes a guest.
    */
-  async deleteGuest(guestId: number, userId: number, ipAddress?: string): Promise<void> {
+  async deleteGuest(eventId: number, guestId: number, userId: number, ipAddress?: string): Promise<void> {
     const [existing] = await db
       .select()
       .from(eventGuests)
-      .where(eq(eventGuests.id, guestId))
+      .where(and(eq(eventGuests.id, guestId), eq(eventGuests.eventId, eventId)))
       .limit(1);
 
     if (!existing) {

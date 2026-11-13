@@ -9,6 +9,7 @@ import { env } from '../config/env.js';
 import { AuthUser } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { deliveryService } from './delivery.service.js';
+import { escapeHtml } from '../utils/html.js';
 
 export interface PasswordRegistration {
   name: string;
@@ -176,7 +177,9 @@ export async function updateAvatar(userId: number, image: Buffer): Promise<User>
     throw new AuthServiceError('Não foi possível processar a imagem enviada.', 400);
   }
 
-  const avatarUrl = `/api/users/${userId}/avatar`;
+  // The image is served with a 1-day public cache, so the URL changes on every upload;
+  // otherwise browsers keep showing the previous avatar
+  const avatarUrl = `/api/users/${userId}/avatar?v=${Date.now()}`;
   const [user] = await db
     .update(users)
     .set({
@@ -309,7 +312,7 @@ function generatePasswordResetEmailHtml(name: string, resetUrl: string): string 
         </tr>
         <tr>
           <td style="padding: 32px 24px;">
-            <p style="font-size: 16px; margin: 0 0 12px;">Olá, <strong>${name}</strong>!</p>
+            <p style="font-size: 16px; margin: 0 0 12px;">Olá, <strong>${escapeHtml(name)}</strong>!</p>
             <p style="font-size: 15px; color: #475569; line-height: 1.6; margin: 0 0 24px;">
               Recebemos uma solicitação para redefinir a senha da sua conta no FotoQR.<br>
               Clique no botão abaixo para criar uma nova senha:
@@ -354,6 +357,10 @@ export async function resetPasswordWithToken(
 ): Promise<void> {
   validateEmail(email);
   validatePassword(newPassword);
+  if (typeof rawToken !== 'string' || !/^[0-9a-f]{96}$/i.test(rawToken.trim())) {
+    throw new AuthServiceError('Token inválido ou expirado.', 400);
+  }
+  rawToken = rawToken.trim();
   const normalizedEmail = normalizeEmail(email);
 
   const [user] = await db

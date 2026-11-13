@@ -69,6 +69,18 @@ router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next:
         eventDate: event.eventDate,
         startDate: event.startDate,
         endDate: event.endDate,
+        category: event.category,
+        startAt: event.startAt,
+        endAt: event.endAt,
+        location: event.location,
+        capacity: event.capacity,
+        status: event.status,
+        maxEntriesPerInvitation: event.maxEntriesPerInvitation,
+        // Images can be large data: URLs, so they are only sent to the owner (cover editor)
+        ...(req.user?.id === event.userId && {
+          coverImage: event.coverImage,
+          backgroundImage: event.backgroundImage,
+        }),
         storageMode: event.storageMode,
         isActive: event.isActive,
         enableDjPlaylist: event.enableDjPlaylist,

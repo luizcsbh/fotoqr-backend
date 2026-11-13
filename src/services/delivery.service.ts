@@ -11,6 +11,7 @@ import { invitationService } from './invitation.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { logAuditEvent } from './audit.service.js';
+import { escapeHtml } from '../utils/html.js';
 
 export interface DispatchSummary {
   total: number;
@@ -86,8 +87,15 @@ export class DeliveryService {
   /**
    * Generates responsive HTML email for an invitation.
    */
-  generateEmailHtml(guestName: string, eventTitle: string, inviteUrl: string, eventDate?: Date | null, location?: string | null): string {
-    const formattedDate = eventDate ? new Date(eventDate).toLocaleString('pt-BR') : 'A definir';
+  generateEmailHtml(rawGuestName: string, rawEventTitle: string, rawInviteUrl: string, eventDate?: Date | null, rawLocation?: string | null): string {
+    const formattedDate = eventDate
+      ? new Date(eventDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+      : 'A definir';
+    // Names, title and location are typed by users: never inject them into the HTML unescaped
+    const guestName = escapeHtml(rawGuestName);
+    const eventTitle = escapeHtml(rawEventTitle);
+    const inviteUrl = escapeHtml(rawInviteUrl);
+    const location = rawLocation ? escapeHtml(rawLocation) : null;
 
     return `
       <!DOCTYPE html>
@@ -159,6 +167,10 @@ export class DeliveryService {
 
     const { invitation, guest, event } = rows[0];
 
+    if (invitation.status === 'cancelled') {
+      throw Object.assign(new Error(`O convite de ${guest.name} está cancelado e não pode ser enviado.`), { statusCode: 400 });
+    }
+
     if (!guest.email) {
       throw new Error(`O convidado ${guest.name} não possui e-mail cadastrado.`);
     }
@@ -190,7 +202,7 @@ export class DeliveryService {
       if (attachPdf) {
         const pdfBuffer = await invitationService.generatePDF(invitationId);
         attachments.push({
-          filename: `convite-${guest.name.toLowerCase().replace(/\s+/g, '-')}.pdf`,
+          filename: `convite-${guest.name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-')}.pdf`,
           content: pdfBuffer,
         });
       }
@@ -198,7 +210,7 @@ export class DeliveryService {
       const info = await transporter.sendMail({
         from: env.SMTP_FROM,
         to: guest.email,
-        subject: `Seu convite para ${event.title}`,
+        subject: `Seu convite para ${event.title}`.replace(/[\r\n]+/g, ' '),
         html,
         attachments,
       });
@@ -215,7 +227,9 @@ export class DeliveryService {
       await db
         .update(eventInvitations)
         .set({ status: 'sent', updatedAt: new Date() })
-        .where(eq(eventInvitations.id, invitationId));
+        // Only pending invitations move to "sent": a cancelled invitation must stay cancelled
+        // (check-in relies on it) and a used one must keep its "used" status
+        .where(and(eq(eventInvitations.id, invitationId), eq(eventInvitations.status, 'pending')));
 
       await logAuditEvent(
         event.id,
@@ -264,6 +278,10 @@ export class DeliveryService {
     }
 
     const { invitation, guest, event } = rows[0];
+
+    if (invitation.status === 'cancelled') {
+      throw Object.assign(new Error(`O convite de ${guest.name} está cancelado e não pode ser enviado.`), { statusCode: 400 });
+    }
 
     if (!guest.phone) {
       throw new Error(`O convidado ${guest.name} não possui telefone cadastrado.`);
@@ -337,7 +355,9 @@ export class DeliveryService {
       await db
         .update(eventInvitations)
         .set({ status: 'sent', updatedAt: new Date() })
-        .where(eq(eventInvitations.id, invitationId));
+        // Only pending invitations move to "sent": a cancelled invitation must stay cancelled
+        // (check-in relies on it) and a used one must keep its "used" status
+        .where(and(eq(eventInvitations.id, invitationId), eq(eventInvitations.status, 'pending')));
 
       await logAuditEvent(
         event.id,
@@ -392,6 +412,9 @@ export class DeliveryService {
     }
 
     const { invitation, guest, event } = rows[0];
+    if (invitation.status === 'cancelled') {
+      throw Object.assign(new Error('Este convite está cancelado e não pode ser enviado.'), { statusCode: 400 });
+    }
     const dest = destination || (channel === 'whatsapp' ? guest.phone : guest.email) || 'direct';
 
     const [deliveryRecord] = await db
@@ -399,7 +422,7 @@ export class DeliveryService {
       .values({
         invitationId,
         channel,
-        destination: String(dest),
+        destination: String(dest).slice(0, 255),
         status: 'sent',
         providerMessageId: `direct-${channel}-${Date.now()}`,
         attempts: 1,
@@ -410,7 +433,7 @@ export class DeliveryService {
     await db
       .update(eventInvitations)
       .set({ status: 'sent', updatedAt: new Date() })
-      .where(eq(eventInvitations.id, invitationId));
+      .where(and(eq(eventInvitations.id, invitationId), eq(eventInvitations.status, 'pending')));
 
     if (userId) {
       await logAuditEvent(
@@ -444,7 +467,13 @@ export class DeliveryService {
       targets = await db
         .select({ id: eventInvitations.id })
         .from(eventInvitations)
-        .where(and(eq(eventInvitations.eventId, eventId), inArray(eventInvitations.id, invitationIds)));
+        .where(
+          and(
+            eq(eventInvitations.eventId, eventId),
+            inArray(eventInvitations.id, invitationIds),
+            ne(eventInvitations.status, 'cancelled')
+          )
+        );
     } else {
       targets = await db
         .select({ id: eventInvitations.id })

@@ -235,8 +235,10 @@ export class ReportService {
     xlsx.utils.book_append_sheet(workbook, worksheet, 'Relatório');
 
     if (format === 'csv') {
-      const csvStr = xlsx.utils.sheet_to_csv(worksheet);
-      return Buffer.from(csvStr, 'utf-8');
+      // Excel only reads UTF-8 CSV correctly (accents in names) when the file starts with a BOM.
+      // ";" is the list separator Excel uses in pt-BR.
+      const csvStr = xlsx.utils.sheet_to_csv(worksheet, { FS: ';' });
+      return Buffer.from('\uFEFF' + csvStr, 'utf-8');
     }
 
     return xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
