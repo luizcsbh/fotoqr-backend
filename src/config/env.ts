@@ -22,6 +22,9 @@ export interface EnvConfig {
   SMTP_USER: string | undefined;
   SMTP_PASS: string | undefined;
   SMTP_FROM: string;
+  // Brevo transactional e-mail API key (xkeysib-...) — sends over HTTPS (port 443). Preferred over SMTP
+  // because hosts such as Render's free tier block outbound SMTP ports (25/465/587).
+  BREVO_API_KEY: string | undefined;
   // WhatsApp Cloud API — optional; falls back to log-only mode when absent
   WHATSAPP_API_TOKEN: string | undefined;
   WHATSAPP_PHONE_NUMBER_ID: string | undefined;
@@ -58,6 +61,7 @@ export const env: EnvConfig = {
   SMTP_USER: process.env.SMTP_USER || undefined,
   SMTP_PASS: process.env.SMTP_PASS || undefined,
   SMTP_FROM: process.env.SMTP_FROM || '"FotoQR Eventos" <noreply@fotoqr.app>',
+  BREVO_API_KEY: process.env.BREVO_API_KEY || undefined,
   // WhatsApp Cloud API
   WHATSAPP_API_TOKEN: process.env.WHATSAPP_API_TOKEN || undefined,
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || undefined,

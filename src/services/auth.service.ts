@@ -281,9 +281,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
 
   // Send email
   try {
-    const transporter = deliveryService.getMailTransporter();
-    await transporter.sendMail({
-      from: env.SMTP_FROM,
+    await deliveryService.sendMail({
       to: user.email,
       subject: 'Redefinição de Senha — FotoQR',
       html: generatePasswordResetEmailHtml(user.name, resetUrl),
@@ -291,7 +289,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
   } catch (err) {
     logger.error('Falha ao enviar e-mail de recuperação de senha:', err);
     throw new AuthServiceError(
-      'Não foi possível enviar o e-mail de recuperação. Verifique a configuração SMTP no servidor.',
+      'Não foi possível enviar o e-mail de recuperação. Verifique a configuração de e-mail (BREVO_API_KEY ou SMTP) no servidor.',
       500
     );
   }

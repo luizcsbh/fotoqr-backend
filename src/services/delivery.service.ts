@@ -20,8 +20,86 @@ export interface DispatchSummary {
   details: Array<{ invitationId: number; channel: string; destination: string; status: string; error?: string }>;
 }
 
+export interface OutgoingMail {
+  to: string;
+  subject: string;
+  html: string;
+  attachments?: Array<{ filename: string; content: Buffer }>;
+}
+
+/** Splits `"Name" <email>` (or a bare e-mail) into its parts. */
+export function parseMailbox(value: string): { name?: string; email: string } {
+  const match = value.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (match) return { name: match[1].trim() || undefined, email: match[2].trim() };
+  return { email: value.trim() };
+}
+
 export class DeliveryService {
   private cachedTransporter: Transporter | null = null;
+
+  /** True when some e-mail provider (Brevo API or SMTP) is configured. */
+  isEmailConfigured(): boolean {
+    return Boolean(env.BREVO_API_KEY || (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS));
+  }
+
+  /**
+   * Sends one e-mail. Uses Brevo's HTTPS API when BREVO_API_KEY is set (works where outbound SMTP
+   * ports are blocked, e.g. Render's free tier), otherwise the SMTP transport.
+   * Returns the provider message id.
+   */
+  async sendMail(mail: OutgoingMail): Promise<string> {
+    const subject = mail.subject.replace(/[\r\n]+/g, ' ');
+
+    if (env.BREVO_API_KEY) {
+      const sender = parseMailbox(env.SMTP_FROM);
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': env.BREVO_API_KEY,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          sender,
+          to: [{ email: mail.to }],
+          subject,
+          htmlContent: mail.html,
+          ...(mail.attachments?.length && {
+            attachment: mail.attachments.map((a) => ({ name: a.filename, content: a.content.toString('base64') })),
+          }),
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+
+      const data = (await response.json().catch(() => ({}))) as { messageId?: string; message?: string; code?: string };
+      if (!response.ok) {
+        throw new Error(`Brevo recusou o envio (${response.status}): ${data.message || data.code || response.statusText}`);
+      }
+      return data.messageId || 'brevo-api';
+    }
+
+    try {
+      const info = await this.getMailTransporter().sendMail({
+        from: env.SMTP_FROM,
+        to: mail.to,
+        subject,
+        html: mail.html,
+        attachments: mail.attachments,
+      });
+      return info.messageId || 'local-stream';
+    } catch (err: any) {
+      // A timeout before any SMTP reply usually means the host blocks the port (Render's free tier
+      // blocks 25/465/587), not wrong credentials: say how to fix it instead of "Connection timeout"
+      if (err?.code === 'ETIMEDOUT' || err?.code === 'ESOCKET' || /timeout/i.test(err?.message || '')) {
+        throw new Error(
+          `Não foi possível conectar ao servidor SMTP ${env.SMTP_HOST}:${env.SMTP_PORT} (tempo esgotado). ` +
+            'A hospedagem pode estar bloqueando portas SMTP (o Render gratuito bloqueia 25, 465 e 587): ' +
+            'configure BREVO_API_KEY para enviar pela API HTTPS do Brevo, ou use SMTP_PORT=2525.'
+        );
+      }
+      throw err;
+    }
+  }
 
   /**
    * Configures nodemailer transport with pooling and strict timeouts to prevent 504 gateway timeouts.
@@ -66,7 +144,7 @@ export class DeliveryService {
     }
 
     throw new Error(
-      'Servidor SMTP não configurado. Adicione SMTP_HOST, SMTP_PORT, SMTP_USER e SMTP_PASS no arquivo .env do backend para envio real de e-mails.'
+      'Envio de e-mail não configurado. Defina BREVO_API_KEY (recomendado) ou SMTP_HOST, SMTP_PORT, SMTP_USER e SMTP_PASS no .env do backend.'
     );
   }
 
@@ -75,8 +153,8 @@ export class DeliveryService {
    */
   getDeliveryConfig() {
     return {
-      smtpConfigured: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS),
-      smtpHost: env.SMTP_HOST || null,
+      smtpConfigured: this.isEmailConfigured(),
+      smtpHost: env.BREVO_API_KEY ? 'api.brevo.com (HTTPS)' : env.SMTP_HOST || null,
       smtpPort: env.SMTP_PORT,
       smtpFrom: env.SMTP_FROM,
       whatsappApiConfigured: Boolean(env.WHATSAPP_API_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID),
@@ -196,8 +274,7 @@ export class DeliveryService {
       .returning();
 
     try {
-      const transporter = this.getMailTransporter();
-      const attachments = [];
+      const attachments: Array<{ filename: string; content: Buffer }> = [];
 
       if (attachPdf) {
         const pdfBuffer = await invitationService.generatePDF(invitationId);
@@ -207,10 +284,9 @@ export class DeliveryService {
         });
       }
 
-      const info = await transporter.sendMail({
-        from: env.SMTP_FROM,
+      const providerMessageId = await this.sendMail({
         to: guest.email,
-        subject: `Seu convite para ${event.title}`.replace(/[\r\n]+/g, ' '),
+        subject: `Seu convite para ${event.title}`,
         html,
         attachments,
       });
@@ -219,7 +295,7 @@ export class DeliveryService {
         .update(invitationDeliveries)
         .set({
           status: 'sent',
-          providerMessageId: info.messageId || 'local-stream',
+          providerMessageId,
           sentAt: new Date(),
         })
         .where(eq(invitationDeliveries.id, deliveryRecord.id));
