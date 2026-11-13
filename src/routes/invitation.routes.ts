@@ -79,35 +79,58 @@ router.put('/events/:id', authenticateToken, requireEventAdmin, async (req: Requ
 
 /**
  * POST /api/events/:id/cover
- * Saves custom cover image and/or background image.
+ * Saves custom cover image and/or background image (via JSON URLs or file upload).
  */
-router.post('/events/:id/cover', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const eventId = req.eventAccess!.eventId;
-    const { coverImage, backgroundImage } = req.body;
+router.post(
+  '/events/:id/cover',
+  authenticateToken,
+  requireEventAdmin,
+  uploadDoc.fields([
+    { name: 'coverFile', maxCount: 1 },
+    { name: 'bgFile', maxCount: 1 },
+  ]),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const eventId = req.eventAccess!.eventId;
+      let { coverImage, backgroundImage } = req.body || {};
 
-    const [updated] = await db
-      .update(events)
-      .set({
-        coverImage: coverImage !== undefined ? coverImage : undefined,
-        backgroundImage: backgroundImage !== undefined ? backgroundImage : undefined,
-        updatedAt: new Date(),
-      })
-      .where(eq(events.id, eventId))
-      .returning();
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
 
-    res.status(200).json({
-      success: true,
-      message: 'Capa do evento atualizada com sucesso.',
-      data: {
-        coverImage: updated.coverImage,
-        backgroundImage: updated.backgroundImage,
-      },
-    });
-  } catch (error) {
-    next(error);
+      if (files?.coverFile?.[0]) {
+        const file = files.coverFile[0];
+        const base64 = file.buffer.toString('base64');
+        coverImage = `data:${file.mimetype};base64,${base64}`;
+      }
+
+      if (files?.bgFile?.[0]) {
+        const file = files.bgFile[0];
+        const base64 = file.buffer.toString('base64');
+        backgroundImage = `data:${file.mimetype};base64,${base64}`;
+      }
+
+      const [updated] = await db
+        .update(events)
+        .set({
+          coverImage: coverImage !== undefined ? coverImage : undefined,
+          backgroundImage: backgroundImage !== undefined ? backgroundImage : undefined,
+          updatedAt: new Date(),
+        })
+        .where(eq(events.id, eventId))
+        .returning();
+
+      res.status(200).json({
+        success: true,
+        message: 'Capa do evento atualizada com sucesso.',
+        data: {
+          coverImage: updated.coverImage,
+          backgroundImage: updated.backgroundImage,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 /* ==========================================================================
    2. Guest Management
