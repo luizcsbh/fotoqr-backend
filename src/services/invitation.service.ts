@@ -463,7 +463,12 @@ export class InvitationService {
       const qrSize = 160;
       const qrX = (doc.page.width - qrSize) / 2;
       doc.image(qrBuffer, qrX, doc.y, { width: qrSize, height: qrSize });
-      doc.y += qrSize + 15;
+      doc.y += qrSize + 8;
+
+      // Invitation code under the QR (the same value it encodes), for manual entry at the gate
+      doc.fillColor('#94A3B8').fontSize(7).font('Helvetica').text('CÓDIGO DO CONVITE', { align: 'center' });
+      doc.fillColor('#334155').fontSize(8).font('Courier').text(invitation.tokenHash, { align: 'center' });
+      doc.moveDown(0.8);
 
       // Instructions
       doc.fillColor('#64748B').fontSize(10).font('Helvetica')
