@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer';
+import nodemailer, { Transporter } from 'nodemailer';
 import { db } from '../config/database.js';
 import {
   invitationDeliveries,
@@ -20,19 +20,26 @@ export interface DispatchSummary {
 }
 
 export class DeliveryService {
+  private cachedTransporter: Transporter | null = null;
+
   /**
-   * Configures nodemailer transport.
-   * If SMTP is configured in env, uses it. In test mode, falls back to stream transport.
+   * Configures nodemailer transport with pooling and strict timeouts to prevent 504 gateway timeouts.
+   * If SMTP is configured in env, uses it with connection pooling.
+   * In test mode, falls back to stream transport.
    * In normal runtime, throws an error if SMTP credentials are missing.
    */
-  getMailTransporter() {
+  getMailTransporter(): Transporter {
+    if (this.cachedTransporter) {
+      return this.cachedTransporter;
+    }
+
     const smtpHost = env.SMTP_HOST;
     const smtpUser = env.SMTP_USER;
     const smtpPass = env.SMTP_PASS;
     const smtpPort = env.SMTP_PORT;
 
     if (smtpHost && smtpUser && smtpPass) {
-      return nodemailer.createTransport({
+      this.cachedTransporter = nodemailer.createTransport({
         host: smtpHost,
         port: smtpPort,
         secure: env.SMTP_SECURE,
@@ -40,7 +47,14 @@ export class DeliveryService {
           user: smtpUser,
           pass: smtpPass,
         },
+        pool: true,
+        maxConnections: 3,
+        maxMessages: 100,
+        connectionTimeout: 8000,
+        greetingTimeout: 5000,
+        socketTimeout: 12000,
       });
+      return this.cachedTransporter;
     }
 
     if (process.env.NODE_ENV === 'test') {
@@ -440,28 +454,35 @@ export class DeliveryService {
 
     let sent = 0;
     let failed = 0;
-    const details = [];
+    const details: Array<{ invitationId: number; channel: string; destination: string; status: string; error?: string }> = [];
 
-    for (const target of targets) {
-      try {
-        let success = false;
-        if (channel === 'email') {
-          success = await this.sendEmail(target.id, userId, attachPdf, ipAddress);
-        } else {
-          success = await this.sendWhatsApp(target.id, userId, ipAddress);
-        }
+    // Process in concurrent chunks of 3 to maximize throughput and avoid HTTP gateway timeouts (504)
+    const chunkSize = 3;
+    for (let i = 0; i < targets.length; i += chunkSize) {
+      const chunk = targets.slice(i, i + chunkSize);
+      await Promise.all(
+        chunk.map(async (target) => {
+          try {
+            let success = false;
+            if (channel === 'email') {
+              success = await this.sendEmail(target.id, userId, attachPdf, ipAddress);
+            } else {
+              success = await this.sendWhatsApp(target.id, userId, ipAddress);
+            }
 
-        if (success) {
-          sent++;
-          details.push({ invitationId: target.id, channel, destination: 'OK', status: 'sent' });
-        } else {
-          failed++;
-          details.push({ invitationId: target.id, channel, destination: '-', status: 'failed', error: 'Erro de entrega' });
-        }
-      } catch (err: any) {
-        failed++;
-        details.push({ invitationId: target.id, channel, destination: '-', status: 'failed', error: err.message });
-      }
+            if (success) {
+              sent++;
+              details.push({ invitationId: target.id, channel, destination: 'OK', status: 'sent' });
+            } else {
+              failed++;
+              details.push({ invitationId: target.id, channel, destination: '-', status: 'failed', error: 'Erro de entrega' });
+            }
+          } catch (err: any) {
+            failed++;
+            details.push({ invitationId: target.id, channel, destination: '-', status: 'failed', error: err.message });
+          }
+        })
+      );
     }
 
     return {
