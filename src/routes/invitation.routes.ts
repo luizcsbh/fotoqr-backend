@@ -467,6 +467,59 @@ router.get('/invitations/public/:token', async (req: Request, res: Response, nex
    ========================================================================== */
 
 /**
+ * GET /api/events/:id/deliveries/config
+ * Returns delivery providers status (SMTP and WhatsApp Cloud API).
+ */
+router.get('/events/:id/deliveries/config', authenticateToken, requireEventAdmin, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const config = deliveryService.getDeliveryConfig();
+    res.status(200).json({
+      success: true,
+      data: config,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/invitations/:id/mark-sent
+ * Records a direct/client delivery (WhatsApp Web or local email client) and updates status.
+ */
+router.post('/invitations/:id/mark-sent', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const invitationId = parseInt(req.params.id as string, 10);
+    const { channel, destination } = req.body || {};
+
+    if (!channel || !['whatsapp', 'email'].includes(channel)) {
+      res.status(400).json({ success: false, error: 'Canal inválido (deve ser whatsapp ou email).' });
+      return;
+    }
+
+    const [invitation] = await db.select().from(eventInvitations).where(eq(eventInvitations.id, invitationId)).limit(1);
+    if (!invitation) {
+      res.status(404).json({ success: false, error: 'Convite não encontrado.' });
+      return;
+    }
+
+    const [event] = await db.select().from(events).where(eq(events.id, invitation.eventId)).limit(1);
+    if (!event || (event.userId !== req.user!.id && req.user!.role !== 'platform_admin')) {
+      res.status(403).json({ success: false, error: 'Acesso negado para gerenciar este convite.' });
+      return;
+    }
+
+    await deliveryService.markAsSent(invitationId, channel, destination, req.user!.id, getIp(req));
+
+    res.status(200).json({
+      success: true,
+      message: 'Status de envio registrado com sucesso.',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/events/:id/deliveries/email
  * Dispatches invitation emails individually or in batch.
  */
@@ -483,6 +536,15 @@ router.post('/events/:id/deliveries/email', authenticateToken, requireEventAdmin
       Boolean(attachPdf),
       getIp(req)
     );
+
+    if (result.sent === 0 && result.failed > 0) {
+      res.status(400).json({
+        success: false,
+        error: result.details[0]?.error || 'Falha no disparo de e-mails.',
+        data: result,
+      });
+      return;
+    }
 
     res.status(200).json({
       success: true,
@@ -511,6 +573,15 @@ router.post('/events/:id/deliveries/whatsapp', authenticateToken, requireEventAd
       false,
       getIp(req)
     );
+
+    if (result.sent === 0 && result.failed > 0) {
+      res.status(400).json({
+        success: false,
+        error: result.details[0]?.error || 'Falha no disparo de WhatsApp.',
+        data: result,
+      });
+      return;
+    }
 
     res.status(200).json({
       success: true,

@@ -22,7 +22,8 @@ export interface DispatchSummary {
 export class DeliveryService {
   /**
    * Configures nodemailer transport.
-   * If SMTP is configured in env, uses it. Otherwise falls back to mock/stream transporter.
+   * If SMTP is configured in env, uses it. In test mode, falls back to stream transport.
+   * In normal runtime, throws an error if SMTP credentials are missing.
    */
   getMailTransporter() {
     const smtpHost = env.SMTP_HOST;
@@ -42,11 +43,30 @@ export class DeliveryService {
       });
     }
 
-    // Development / fallback transporter that writes to log
-    return nodemailer.createTransport({
-      streamTransport: true,
-      newline: 'windows',
-    });
+    if (process.env.NODE_ENV === 'test') {
+      return nodemailer.createTransport({
+        streamTransport: true,
+        newline: 'windows',
+      });
+    }
+
+    throw new Error(
+      'Servidor SMTP não configurado. Adicione SMTP_HOST, SMTP_PORT, SMTP_USER e SMTP_PASS no arquivo .env do backend para envio real de e-mails.'
+    );
+  }
+
+  /**
+   * Returns current configuration status for deliveries.
+   */
+  getDeliveryConfig() {
+    return {
+      smtpConfigured: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS),
+      smtpHost: env.SMTP_HOST || null,
+      smtpPort: env.SMTP_PORT,
+      smtpFrom: env.SMTP_FROM,
+      whatsappApiConfigured: Boolean(env.WHATSAPP_API_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID),
+      whatsappPhoneId: env.WHATSAPP_PHONE_NUMBER_ID || null,
+    };
   }
 
   /**
@@ -205,7 +225,7 @@ export class DeliveryService {
         })
         .where(eq(invitationDeliveries.id, deliveryRecord.id));
 
-      return false;
+      throw err;
     }
   }
 
@@ -256,7 +276,7 @@ export class DeliveryService {
       let providerMessageId = 'wa-mock-' + Date.now();
 
       if (waToken && waPhoneId) {
-        // Disparar via Meta WhatsApp Cloud API
+        // Disparar via Meta WhatsApp Cloud API oficial
         const waResponse = await fetch(`https://graph.facebook.com/v19.0/${waPhoneId}/messages`, {
           method: 'POST',
           headers: {
@@ -282,7 +302,13 @@ export class DeliveryService {
 
         providerMessageId = resData?.messages?.[0]?.id || providerMessageId;
       } else {
-        logger.info(`[WhatsApp Simulado / Fallback] Enviado para ${destination}: Convite ${event.title} - ${inviteUrl}`);
+        if (process.env.NODE_ENV === 'test') {
+          logger.info(`[WhatsApp Test] Enviado para ${destination}: Convite ${event.title} - ${inviteUrl}`);
+        } else {
+          throw new Error(
+            'WhatsApp Cloud API não configurada no servidor (.env). Configure WHATSAPP_API_TOKEN e WHATSAPP_PHONE_NUMBER_ID, ou use o botão de envio direto pelo WhatsApp Web/App na lista.'
+          );
+        }
       }
 
       await db
@@ -321,8 +347,70 @@ export class DeliveryService {
         })
         .where(eq(invitationDeliveries.id, deliveryRecord.id));
 
-      return false;
+      throw err;
     }
+  }
+
+  /**
+   * Registers a manual/direct delivery (e.g. organizer sent via WhatsApp Web or mailto).
+   */
+  async markAsSent(
+    invitationId: number,
+    channel: 'whatsapp' | 'email',
+    destination?: string,
+    userId?: number,
+    ipAddress?: string
+  ): Promise<boolean> {
+    const rows = await db
+      .select({
+        invitation: eventInvitations,
+        guest: eventGuests,
+        event: events,
+      })
+      .from(eventInvitations)
+      .innerJoin(eventGuests, eq(eventInvitations.guestId, eventGuests.id))
+      .innerJoin(events, eq(eventInvitations.eventId, events.id))
+      .where(eq(eventInvitations.id, invitationId))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new Error('Convite não encontrado.');
+    }
+
+    const { invitation, guest, event } = rows[0];
+    const dest = destination || (channel === 'whatsapp' ? guest.phone : guest.email) || 'direct';
+
+    const [deliveryRecord] = await db
+      .insert(invitationDeliveries)
+      .values({
+        invitationId,
+        channel,
+        destination: String(dest),
+        status: 'sent',
+        providerMessageId: `direct-${channel}-${Date.now()}`,
+        attempts: 1,
+        sentAt: new Date(),
+      })
+      .returning();
+
+    await db
+      .update(eventInvitations)
+      .set({ status: 'sent', updatedAt: new Date() })
+      .where(eq(eventInvitations.id, invitationId));
+
+    if (userId) {
+      await logAuditEvent(
+        event.id,
+        userId,
+        channel === 'whatsapp' ? 'DELIVERY_WHATSAPP_SENT' : 'DELIVERY_EMAIL_SENT',
+        'invitation_deliveries',
+        deliveryRecord.id,
+        { destination: dest, guestName: guest.name, mode: 'direct' },
+        ipAddress
+      );
+    }
+
+    return true;
   }
 
   /**
