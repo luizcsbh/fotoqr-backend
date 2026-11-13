@@ -63,8 +63,8 @@ export class CheckinService {
     deviceIdentifier?: string,
     ipAddress?: string
   ): Promise<ValidationResponse> {
-    const trimmed = String(tokenOrRaw).trim();
-    if (!trimmed) {
+    let cleanToken = String(tokenOrRaw).trim();
+    if (!cleanToken) {
       return {
         status: 'INVALIDO',
         allowed: false,
@@ -73,7 +73,13 @@ export class CheckinService {
       };
     }
 
-    const tokenHash = trimmed.length === 64 ? trimmed : this.hashToken(trimmed);
+    // Se o leitor capturar a URL completa (ex: https://.../convite/<token_ou_hash>)
+    if (cleanToken.includes('/convite/')) {
+      const parts = cleanToken.split('/convite/');
+      cleanToken = parts[parts.length - 1].split('?')[0].split('#')[0].trim();
+    }
+
+    const tokenHash = cleanToken.length === 64 ? cleanToken : this.hashToken(cleanToken);
 
     // Run within atomic transaction with row locking
     return await db.transaction(async (tx) => {
