@@ -26,3 +26,4 @@ main().catch((err) => {
   console.error('Migration failed:', err.message);
   process.exit(1);
 });
+
