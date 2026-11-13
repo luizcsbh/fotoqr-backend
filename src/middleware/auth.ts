@@ -6,6 +6,7 @@ export interface AuthUser {
   id: number;
   email: string;
   name: string;
+  role?: string;
   avatarUrl?: string | null;
 }
 
@@ -54,6 +55,7 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
       id: decoded.id,
       email: decoded.email,
       name: decoded.name,
+      role: decoded.role || 'user',
       avatarUrl: decoded.avatarUrl || null,
     };
     next();
@@ -82,6 +84,7 @@ export function optionalAuth(req: Request, res: Response, next: NextFunction): v
       id: decoded.id,
       email: decoded.email,
       name: decoded.name,
+      role: decoded.role || 'user',
       avatarUrl: decoded.avatarUrl || null,
     };
   } catch {

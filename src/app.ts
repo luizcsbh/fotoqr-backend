@@ -16,6 +16,7 @@ import eventRoutes from './routes/event.routes.js';
 import photoRoutes from './routes/photo.routes.js';
 import healthRoutes from './routes/health.routes.js';
 import musicRoutes from './routes/music.routes.js';
+import invitationRoutes from './routes/invitation.routes.js';
 import { getUserAvatar } from './services/auth.service.js';
 
 export const createApp = (): Express => {
@@ -135,6 +136,8 @@ export const createApp = (): Express => {
   app.use('/api/events', eventRoutes);
   app.use('/api', photoRoutes);
   app.use('/api', musicRoutes);
+  app.use('/api', invitationRoutes);
+  app.use('/api/v1', invitationRoutes);
 
   // 404 Route Not Found Handler
   app.use((req: Request, res: Response) => {

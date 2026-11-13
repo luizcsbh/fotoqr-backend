@@ -47,6 +47,7 @@ export const users = pgTable(
     avatarData: bytea('avatar_data'),
     avatarMimeType: varchar('avatar_mime_type', { length: 50 }),
     passwordHash: text('password_hash'),
+    role: varchar('role', { length: 50 }).default('user').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -69,6 +70,15 @@ export const events = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     title: varchar('title', { length: 255 }).notNull(),
     description: text('description'),
+    category: varchar('category', { length: 100 }),
+    startAt: timestamp('start_at', { withTimezone: true }),
+    endAt: timestamp('end_at', { withTimezone: true }),
+    location: text('location'),
+    capacity: integer('capacity'),
+    coverImage: text('cover_image'),
+    backgroundImage: text('background_image'),
+    status: varchar('status', { length: 50 }).default('published').notNull(),
+    maxEntriesPerInvitation: integer('max_entries_per_invitation').default(1).notNull(),
     eventDate: timestamp('event_date', { withTimezone: true }),
     startDate: timestamp('start_date', { withTimezone: true }),
     endDate: timestamp('end_date', { withTimezone: true }),
@@ -144,16 +154,189 @@ export const musicRequests = pgTable(
   (table) => [
     index('music_requests_event_id_idx').on(table.eventId),
     index('music_requests_status_idx').on(table.status),
-    // Prevent the same Spotify track from being added twice to an event
     uniqueIndex('music_requests_event_spotify_unique')
       .on(table.eventId, table.spotifyTrackId)
       .where(sql`${table.spotifyTrackId} IS NOT NULL`),
   ]
 );
 
+// Event Users (Collaborators / Co-organizers)
+export const eventUsers = pgTable(
+  'event_users',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: varchar('role', { length: 50 }).default('admin').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('event_users_event_id_idx').on(table.eventId),
+    index('event_users_user_id_idx').on(table.userId),
+    uniqueIndex('event_users_event_user_idx').on(table.eventId, table.userId),
+  ]
+);
+
+// Event Guests
+export const eventGuests = pgTable(
+  'event_guests',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 255 }).notNull(),
+    email: varchar('email', { length: 255 }),
+    phone: varchar('phone', { length: 50 }),
+    category: varchar('category', { length: 100 }).default('Convidado').notNull(),
+    notes: text('notes'),
+    externalId: varchar('external_id', { length: 100 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('event_guests_event_id_idx').on(table.eventId),
+    index('event_guests_email_idx').on(table.eventId, table.email),
+    index('event_guests_phone_idx').on(table.eventId, table.phone),
+  ]
+);
+
+// Event Invitations
+export const eventInvitations = pgTable(
+  'event_invitations',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    guestId: integer('guest_id')
+      .notNull()
+      .references(() => eventGuests.id, { onDelete: 'cascade' }),
+    tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
+    status: varchar('status', { length: 50 }).default('pending').notNull(),
+    maxEntries: integer('max_entries').default(1).notNull(),
+    usedEntries: integer('used_entries').default(0).notNull(),
+    validFrom: timestamp('valid_from', { withTimezone: true }),
+    validUntil: timestamp('valid_until', { withTimezone: true }),
+    issuedAt: timestamp('issued_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('event_invitations_token_hash_idx').on(table.tokenHash),
+    index('event_invitations_event_id_idx').on(table.eventId),
+    index('event_invitations_guest_id_idx').on(table.guestId),
+    index('event_invitations_status_idx').on(table.status),
+  ]
+);
+
+// Event Readers (Authorized QR Code readers)
+export const eventReaders = pgTable(
+  'event_readers',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('event_readers_event_id_idx').on(table.eventId),
+    index('event_readers_user_id_idx').on(table.userId),
+    uniqueIndex('event_readers_event_user_idx').on(table.eventId, table.userId),
+  ]
+);
+
+// Event Checkins
+export const eventCheckins = pgTable(
+  'event_checkins',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    invitationId: integer('invitation_id')
+      .notNull()
+      .references(() => eventInvitations.id, { onDelete: 'cascade' }),
+    guestId: integer('guest_id')
+      .notNull()
+      .references(() => eventGuests.id, { onDelete: 'cascade' }),
+    readerUserId: integer('reader_user_id').references(() => users.id, { onDelete: 'set null' }),
+    deviceIdentifier: varchar('device_identifier', { length: 255 }),
+    checkedInAt: timestamp('checked_in_at', { withTimezone: true }).defaultNow().notNull(),
+    result: varchar('result', { length: 50 }).notNull(),
+  },
+  (table) => [
+    index('event_checkins_event_id_idx').on(table.eventId),
+    index('event_checkins_invitation_id_idx').on(table.invitationId),
+    index('event_checkins_guest_id_idx').on(table.guestId),
+    index('event_checkins_reader_user_id_idx').on(table.readerUserId),
+    index('event_checkins_checked_in_at_idx').on(table.checkedInAt),
+  ]
+);
+
+// Invitation Deliveries
+export const invitationDeliveries = pgTable(
+  'invitation_deliveries',
+  {
+    id: serial('id').primaryKey(),
+    invitationId: integer('invitation_id')
+      .notNull()
+      .references(() => eventInvitations.id, { onDelete: 'cascade' }),
+    channel: varchar('channel', { length: 50 }).notNull(),
+    destination: varchar('destination', { length: 255 }).notNull(),
+    status: varchar('status', { length: 50 }).default('pending').notNull(),
+    providerMessageId: varchar('provider_message_id', { length: 255 }),
+    attempts: integer('attempts').default(0).notNull(),
+    errorMessage: text('error_message'),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('invitation_deliveries_invitation_id_idx').on(table.invitationId),
+    index('invitation_deliveries_channel_status_idx').on(table.channel, table.status),
+  ]
+);
+
+// Event Audit Logs
+export const eventAuditLogs = pgTable(
+  'event_audit_logs',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+    action: varchar('action', { length: 100 }).notNull(),
+    entityType: varchar('entity_type', { length: 100 }).notNull(),
+    entityId: integer('entity_id'),
+    metadata: jsonb('metadata'),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('event_audit_logs_event_id_idx').on(table.eventId),
+    index('event_audit_logs_user_id_idx').on(table.userId),
+    index('event_audit_logs_action_idx').on(table.action),
+    index('event_audit_logs_created_at_idx').on(table.createdAt),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   events: many(events),
+  eventUsers: many(eventUsers),
+  eventReaders: many(eventReaders),
+  auditLogs: many(eventAuditLogs),
 }));
 
 export const eventsRelations = relations(events, ({ one, many }) => ({
@@ -163,6 +346,12 @@ export const eventsRelations = relations(events, ({ one, many }) => ({
   }),
   photos: many(photos),
   musicRequests: many(musicRequests),
+  eventUsers: many(eventUsers),
+  guests: many(eventGuests),
+  invitations: many(eventInvitations),
+  readers: many(eventReaders),
+  checkins: many(eventCheckins),
+  auditLogs: many(eventAuditLogs),
 }));
 
 export const photosRelations = relations(photos, ({ one }) => ({
@@ -179,6 +368,87 @@ export const musicRequestsRelations = relations(musicRequests, ({ one }) => ({
   }),
 }));
 
+export const eventUsersRelations = relations(eventUsers, ({ one }) => ({
+  event: one(events, {
+    fields: [eventUsers.eventId],
+    references: [events.id],
+  }),
+  user: one(users, {
+    fields: [eventUsers.userId],
+    references: [users.id],
+  }),
+}));
+
+export const eventGuestsRelations = relations(eventGuests, ({ one, many }) => ({
+  event: one(events, {
+    fields: [eventGuests.eventId],
+    references: [events.id],
+  }),
+  invitations: many(eventInvitations),
+  checkins: many(eventCheckins),
+}));
+
+export const eventInvitationsRelations = relations(eventInvitations, ({ one, many }) => ({
+  event: one(events, {
+    fields: [eventInvitations.eventId],
+    references: [events.id],
+  }),
+  guest: one(eventGuests, {
+    fields: [eventInvitations.guestId],
+    references: [eventGuests.id],
+  }),
+  deliveries: many(invitationDeliveries),
+  checkins: many(eventCheckins),
+}));
+
+export const eventReadersRelations = relations(eventReaders, ({ one }) => ({
+  event: one(events, {
+    fields: [eventReaders.eventId],
+    references: [events.id],
+  }),
+  user: one(users, {
+    fields: [eventReaders.userId],
+    references: [users.id],
+  }),
+}));
+
+export const eventCheckinsRelations = relations(eventCheckins, ({ one }) => ({
+  event: one(events, {
+    fields: [eventCheckins.eventId],
+    references: [events.id],
+  }),
+  invitation: one(eventInvitations, {
+    fields: [eventCheckins.invitationId],
+    references: [eventInvitations.id],
+  }),
+  guest: one(eventGuests, {
+    fields: [eventCheckins.guestId],
+    references: [eventGuests.id],
+  }),
+  reader: one(users, {
+    fields: [eventCheckins.readerUserId],
+    references: [users.id],
+  }),
+}));
+
+export const invitationDeliveriesRelations = relations(invitationDeliveries, ({ one }) => ({
+  invitation: one(eventInvitations, {
+    fields: [invitationDeliveries.invitationId],
+    references: [eventInvitations.id],
+  }),
+}));
+
+export const eventAuditLogsRelations = relations(eventAuditLogs, ({ one }) => ({
+  event: one(events, {
+    fields: [eventAuditLogs.eventId],
+    references: [events.id],
+  }),
+  user: one(users, {
+    fields: [eventAuditLogs.userId],
+    references: [users.id],
+  }),
+}));
+
 // Inferred Types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -191,3 +461,24 @@ export type NewPhoto = typeof photos.$inferInsert;
 
 export type MusicRequest = typeof musicRequests.$inferSelect;
 export type NewMusicRequest = typeof musicRequests.$inferInsert;
+
+export type EventUser = typeof eventUsers.$inferSelect;
+export type NewEventUser = typeof eventUsers.$inferInsert;
+
+export type EventGuest = typeof eventGuests.$inferSelect;
+export type NewEventGuest = typeof eventGuests.$inferInsert;
+
+export type EventInvitation = typeof eventInvitations.$inferSelect;
+export type NewEventInvitation = typeof eventInvitations.$inferInsert;
+
+export type EventReader = typeof eventReaders.$inferSelect;
+export type NewEventReader = typeof eventReaders.$inferInsert;
+
+export type EventCheckin = typeof eventCheckins.$inferSelect;
+export type NewEventCheckin = typeof eventCheckins.$inferInsert;
+
+export type InvitationDelivery = typeof invitationDeliveries.$inferSelect;
+export type NewInvitationDelivery = typeof invitationDeliveries.$inferInsert;
+
+export type EventAuditLog = typeof eventAuditLogs.$inferSelect;
+export type NewEventAuditLog = typeof eventAuditLogs.$inferInsert;

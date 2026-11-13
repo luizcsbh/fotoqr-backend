@@ -220,6 +220,7 @@ export function generateJWT(user: User | AuthUser): string {
     id: user.id,
     email: user.email,
     name: user.name,
+    role: (user as any).role || 'user',
     avatarUrl: user.avatarUrl,
   };
 
