@@ -48,6 +48,8 @@ export const users = pgTable(
     avatarMimeType: varchar('avatar_mime_type', { length: 50 }),
     passwordHash: text('password_hash'),
     role: varchar('role', { length: 50 }).default('user').notNull(),
+    // Bumped on every password change/reset: login tokens carrying an older value stop working
+    tokenVersion: integer('token_version').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },

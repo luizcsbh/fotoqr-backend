@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { pool, checkDatabaseConnection } from './config/database.js';
 import { logger } from './utils/logger.js';
+import { ensureSchema } from './config/ensureSchema.js';
 
 async function startServer() {
   const app = createApp();
@@ -22,6 +23,8 @@ async function startServer() {
   } catch (err) {
     logger.warn('Erro durante a verificação inicial do banco de dados:', err);
   }
+
+  await ensureSchema();
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Servidor FotoQR rodando com sucesso na porta ${PORT} em 0.0.0.0`);

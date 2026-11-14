@@ -12,7 +12,7 @@ import {
   resetPasswordWithToken,
 } from '../services/auth.service.js';
 import { optionalAuth, authenticateToken } from '../middleware/auth.js';
-import { authLimiter } from '../middleware/rateLimiter.js';
+import { authLimiter, registerLimiter } from '../middleware/rateLimiter.js';
 import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
@@ -50,7 +50,7 @@ function serializeUser(user: User) {
   };
 }
 
-router.post('/register', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/register', registerLimiter, authLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { name, email, password } = req.body ?? {};
     const user = await registerWithPassword({ name, email, password });
@@ -95,8 +95,10 @@ router.patch('/profile', authenticateToken, async (req: Request, res: Response, 
 
 router.put('/profile/password', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await changePassword(req.user!.id, req.body?.currentPassword, req.body?.newPassword);
-    res.status(200).json({ success: true, message: 'Senha alterada com sucesso.' });
+    const user = await changePassword(req.user!.id, req.body?.currentPassword, req.body?.newPassword);
+    // The password change signs out every other session; this one gets a fresh cookie
+    setAuthCookie(res, generateJWT(user));
+    res.status(200).json({ success: true, message: 'Senha alterada com sucesso. As outras sessões foram encerradas.' });
   } catch (error) {
     next(error);
   }

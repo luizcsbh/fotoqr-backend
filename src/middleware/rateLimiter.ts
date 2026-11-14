@@ -30,6 +30,21 @@ export const apiLimiter = rateLimit({
   },
 });
 
+/**
+ * Sign-up tells whether an e-mail already has an account (unavoidable without e-mail confirmation),
+ * so it gets its own, tighter budget: testing a list of e-mails becomes impractically slow.
+ */
+export const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Muitas tentativas de cadastro a partir desta rede. Tente novamente em uma hora.',
+  },
+});
+
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,

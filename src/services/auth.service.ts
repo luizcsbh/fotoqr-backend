@@ -10,6 +10,7 @@ import { AuthUser } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { deliveryService } from './delivery.service.js';
 import { escapeHtml } from '../utils/html.js';
+import { forgetTokenVersion } from '../middleware/auth.js';
 
 export interface PasswordRegistration {
   name: string;
@@ -155,12 +156,14 @@ export async function changePassword(
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 12);
+  // New session version: every other device logged in with the old password is signed out
   const [updatedUser] = await db
     .update(users)
-    .set({ passwordHash, updatedAt: new Date() })
+    .set({ passwordHash, tokenVersion: sql`${users.tokenVersion} + 1`, updatedAt: new Date() })
     .where(eq(users.id, userId))
     .returning();
   if (!updatedUser) throw new AuthServiceError('Usuário não encontrado.', 404);
+  forgetTokenVersion(userId);
   return updatedUser;
 }
 
@@ -226,6 +229,7 @@ export function generateJWT(user: User | AuthUser): string {
     name: user.name,
     role: (user as any).role || 'user',
     avatarUrl: user.avatarUrl,
+    tv: (user as any).tokenVersion ?? (user as any).tv ?? 0,
   };
 
   return jwt.sign(payload, env.JWT_SECRET, {
@@ -402,10 +406,12 @@ export async function resetPasswordWithToken(
 
   // Set new password
   const passwordHash = await bcrypt.hash(newPassword, 12);
+  // New session version: whoever was using the old password (or a stolen session) is signed out
   await db
     .update(users)
-    .set({ passwordHash, updatedAt: new Date() })
+    .set({ passwordHash, tokenVersion: sql`${users.tokenVersion} + 1`, updatedAt: new Date() })
     .where(eq(users.id, user.id));
+  forgetTokenVersion(user.id);
 
   // Invalidate remaining tokens
   await db

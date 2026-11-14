@@ -84,7 +84,7 @@ async function main(): Promise<void> {
   const passwordHash = await bcrypt.hash(password, 12);
   const result = await pool.query(
     `UPDATE users
-     SET password_hash = $1, updated_at = NOW()
+     SET password_hash = $1, token_version = token_version + 1, updated_at = NOW()
      WHERE lower(email) = $2 AND password_hash IS NOT NULL
      RETURNING id`,
     [passwordHash, email]
