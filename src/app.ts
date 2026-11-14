@@ -17,6 +17,7 @@ import photoRoutes from './routes/photo.routes.js';
 import healthRoutes from './routes/health.routes.js';
 import musicRoutes from './routes/music.routes.js';
 import staffRoutes from './routes/staff.routes.js';
+import messageRoutes from './routes/message.routes.js';
 import invitationRoutes from './routes/invitation.routes.js';
 import { getUserAvatar } from './services/auth.service.js';
 
@@ -152,6 +153,7 @@ export const createApp = (): Express => {
   app.use('/api', photoRoutes);
   app.use('/api', musicRoutes);
   app.use('/api', staffRoutes);
+  app.use('/api', messageRoutes);
   app.use('/api', invitationRoutes);
   app.use('/api/v1', invitationRoutes);
 

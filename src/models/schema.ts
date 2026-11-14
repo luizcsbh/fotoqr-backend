@@ -90,6 +90,8 @@ export const events = pgTable(
     isActive: boolean('is_active').default(true).notNull(),
     enableDjPlaylist: boolean('enable_dj_playlist').default(false).notNull(),
     requirePhotoApproval: boolean('require_photo_approval').default(false).notNull(),
+    // Guests can leave messages on the event wall (shown on the Telão)
+    enableMessageWall: boolean('enable_message_wall').default(false).notNull(),
     // Owner's QR code / table card design (null until saved for the first time)
     qrCustomization: jsonb('qr_customization').$type<QRCustomization>(),
     photoCount: integer('photo_count').default(0).notNull(),
@@ -263,6 +265,23 @@ export const eventReaders = pgTable(
 );
 
 // Event DJs (Authorized DJ users who can manage the playlist)
+// Messages guests leave on the event wall ("Mural de recados"). The WhatsApp number is only
+// for the event owner; the Telão and other guests only see the name and the message.
+export const eventMessages = pgTable(
+  'event_messages',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    guestName: varchar('guest_name', { length: 80 }).notNull(),
+    guestPhone: varchar('guest_phone', { length: 20 }).notNull(),
+    message: text('message').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index('event_messages_event_created_idx').on(table.eventId, table.createdAt)]
+);
+
 export const eventDjs = pgTable(
   'event_djs',
   {
@@ -537,6 +556,8 @@ export type NewEventInvitation = typeof eventInvitations.$inferInsert;
 export type EventReader = typeof eventReaders.$inferSelect;
 export type NewEventReader = typeof eventReaders.$inferInsert;
 
+export type EventMessage = typeof eventMessages.$inferSelect;
+export type NewEventMessage = typeof eventMessages.$inferInsert;
 export type EventDj = typeof eventDjs.$inferSelect;
 export type NewEventDj = typeof eventDjs.$inferInsert;
 

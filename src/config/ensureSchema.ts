@@ -46,4 +46,22 @@ export async function ensureSchema(): Promise<void> {
   } catch (err) {
     logger.error('Falha ao aplicar ajustes de schema na inicialização (invitation_template):', err);
   }
+
+  try {
+    // Guest message wall (see migration 0014)
+    await db.execute(sql.raw(`
+      ALTER TABLE events ADD COLUMN IF NOT EXISTS enable_message_wall boolean NOT NULL DEFAULT false;
+      CREATE TABLE IF NOT EXISTS event_messages (
+        id SERIAL PRIMARY KEY,
+        event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        guest_name varchar(80) NOT NULL,
+        guest_phone varchar(20) NOT NULL,
+        message text NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS event_messages_event_created_idx ON event_messages(event_id, created_at);
+    `));
+  } catch (err) {
+    logger.error('Falha ao aplicar ajustes de schema na inicialização (mural de recados):', err);
+  }
 }

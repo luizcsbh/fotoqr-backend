@@ -9,7 +9,8 @@ import { galleryService } from '../services/gallery.service.js';
 import { eventService } from '../services/event.service.js';
 import { localStorageService } from '../services/local.storage.service.js';
 import { uploadMiddleware } from '../middleware/upload.js';
-import { uploadLimiter } from '../middleware/rateLimiter.js';
+import { galleryLimiter, uploadLimiter } from '../middleware/rateLimiter.js';
+import { messageWallService } from '../services/messageWall.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { moderateImage, ModerationResult } from '../services/moderation.service.js';
@@ -192,7 +193,7 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
  * GET /api/events/:uuid/gallery
  * Public paginated gallery of photos uploaded to the event.
  */
-router.get('/events/:uuid/gallery', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/events/:uuid/gallery', galleryLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const uuid = req.params.uuid as string;
     const page = parseInt(req.query.page as string, 10) || 1;
@@ -208,6 +209,9 @@ router.get('/events/:uuid/gallery', async (req: Request, res: Response, next: Ne
     }
 
     const galleryData = await galleryService.getEventPhotos(event.id, page, limit);
+    // ?messages=1 (Telão): the wall messages come in the same refresh, so it polls a single endpoint
+    const withMessages = req.query.messages === '1' && event.enableMessageWall;
+    const messages = withMessages ? await messageWallService.listPublic(event.id) : [];
 
     const formattedPhotos = galleryData.photos.map((p) => ({
       id: String(p.id),
@@ -234,8 +238,10 @@ router.get('/events/:uuid/gallery', async (req: Request, res: Response, next: Ne
           endDate: event.endDate,
           isActive: event.isActive,
           photoCount: event.photoCount,
+          enableMessageWall: event.enableMessageWall,
         },
         photos: formattedPhotos,
+        messages,
         total: galleryData.pagination.total,
         page: galleryData.pagination.page,
         limit: galleryData.pagination.limit,

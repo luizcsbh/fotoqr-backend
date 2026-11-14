@@ -86,6 +86,7 @@ router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next:
         isActive: event.isActive,
         enableDjPlaylist: event.enableDjPlaylist,
         requirePhotoApproval: event.requirePhotoApproval,
+        enableMessageWall: event.enableMessageWall,
         photoCount: event.photoCount,
         publicUrl: event.publicUrl,
         qrCodeUrl: event.qrCodeUrl,
