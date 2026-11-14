@@ -104,14 +104,14 @@ export class EventService {
       return this.getEventByUuid(trimmed);
     }
 
-    if (!userId) {
-      return null;
-    }
+    const whereCondition = userId
+      ? and(eq(events.id, Number(trimmed)), eq(events.userId, userId))
+      : eq(events.id, Number(trimmed));
 
     const [event] = await db
       .select()
       .from(events)
-      .where(and(eq(events.id, Number(trimmed)), eq(events.userId, userId)))
+      .where(whereCondition)
       .limit(1);
 
     return event ? this.withQRCode(event) : null;

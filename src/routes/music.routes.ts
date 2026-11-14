@@ -205,7 +205,7 @@ router.get('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res:
     const idOrUuid = req.params.idOrUuid as string;
     const userId = req.user!.id;
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -245,12 +245,14 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
     const { email } = req.body;
     const userId = req.user!.id;
 
-    if (!email || typeof email !== 'string') {
-      res.status(400).json({ success: false, error: 'Informe o e-mail do DJ.' });
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      res.status(400).json({ success: false, error: 'Informe um e-mail válido para o DJ.' });
       return;
     }
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    const cleanEmail = email.trim().toLowerCase();
+
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -264,21 +266,32 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
     const [targetUser] = await db
       .select({ id: users.id })
       .from(users)
-      .where(sql`lower(${users.email}) = ${email.trim().toLowerCase()}`)
+      .where(sql`lower(${users.email}) = ${cleanEmail}`)
       .limit(1);
 
-    if (!targetUser) {
-      res.status(404).json({
-        success: false,
-        error: 'Nenhum usuário cadastrado com este e-mail no FotoQR.',
-      });
-      return;
+    let djUserId: number;
+
+    if (targetUser) {
+      djUserId = targetUser.id;
+    } else {
+      // Cria a conta do DJ automaticamente para permitir autorizar qualquer e-mail
+      const namePart = cleanEmail.split('@')[0].replace(/[._-]/g, ' ');
+      const formattedName = 'DJ ' + namePart.charAt(0).toUpperCase() + namePart.slice(1);
+      const [newUser] = await db
+        .insert(users)
+        .values({
+          email: cleanEmail,
+          name: formattedName,
+          role: 'dj',
+        })
+        .returning({ id: users.id });
+      djUserId = newUser.id;
     }
 
     const [existing] = await db
       .select()
       .from(eventDjs)
-      .where(and(eq(eventDjs.eventId, event.id), eq(eventDjs.userId, targetUser.id)))
+      .where(and(eq(eventDjs.eventId, event.id), eq(eventDjs.userId, djUserId)))
       .limit(1);
 
     if (existing) {
@@ -291,7 +304,7 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
 
     await db.insert(eventDjs).values({
       eventId: event.id,
-      userId: targetUser.id,
+      userId: djUserId,
       active: true,
     });
 
@@ -316,7 +329,7 @@ router.delete('/events/:idOrUuid/djs/:targetUserId', authenticateToken, async (r
       return;
     }
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
