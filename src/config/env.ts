@@ -67,4 +67,20 @@ export const env: EnvConfig = {
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || undefined,
 };
 
+// In production a missing secret must stop the server: the fallbacks above are public (they are in
+// the source code), so anyone could forge a login token — including a platform_admin one.
+if (env.NODE_ENV === 'production') {
+  const problems: string[] = [];
+  for (const key of ['JWT_SECRET', 'SESSION_SECRET'] as const) {
+    const value = process.env[key];
+    if (!value || value.length < 32 || value.startsWith('dev-')) {
+      problems.push(`${key} ausente ou fraco (mínimo 32 caracteres aleatórios)`);
+    }
+  }
+  if (!process.env.DATABASE_URL) problems.push('DATABASE_URL ausente');
+  if (problems.length > 0) {
+    throw new Error(`Configuração insegura para produção: ${problems.join('; ')}.`);
+  }
+}
+
 export default env;

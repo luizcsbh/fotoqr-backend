@@ -5,6 +5,7 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos, Photo } from '../models/schema.js';
 import { logger } from '../utils/logger.js';
+import { photoUrls } from '../utils/photoAccess.js';
 
 export interface UploadResult {
   id?: number;
@@ -126,8 +127,8 @@ export class PhotoService {
             storedFilename: existingPhoto[0].storedFilename,
             storageProvider: existingPhoto[0].storageProvider,
             storagePath: existingPhoto[0].storagePath,
-            publicUrl: `/api/photos/${existingPhoto[0].id}/file`,
-            thumbnailUrl: `/api/photos/${existingPhoto[0].id}/thumbnail`,
+            publicUrl: photoUrls(existingPhoto[0].id).url,
+            thumbnailUrl: photoUrls(existingPhoto[0].id).thumbnailUrl,
             fileSize: existingPhoto[0].fileSize,
             status: 'duplicate',
             error: 'Esta foto já foi enviada anteriormente para este evento.',
@@ -164,8 +165,8 @@ export class PhotoService {
           storedFilename,
           storageProvider: 'database',
           storagePath: 'database',
-          publicUrl: `/api/photos/${photoRecord.id}/file`,
-          thumbnailUrl: `/api/photos/${photoRecord.id}/thumbnail`,
+          publicUrl: photoUrls(photoRecord.id).url,
+          thumbnailUrl: photoUrls(photoRecord.id).thumbnailUrl,
           fileSize,
           status: 'success',
           pendingApproval: reviewStatus === 'pending',

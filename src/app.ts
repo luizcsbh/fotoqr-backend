@@ -74,9 +74,23 @@ export const createApp = (): Express => {
     })
   );
 
-  // Request Logging
+  // CSRF: the CORS check above already answers 403 to any request whose Origin is not one of our
+  // frontends, so a malicious site cannot submit forms to the API with the user's cookie.
+
+  // Request Logging — invitation/QR tokens and reset tokens are bearer credentials: mask them
   if (env.NODE_ENV !== 'test') {
-    app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+    morgan.token('safe-url', (req: Request) =>
+      (req.originalUrl || req.url)
+        .replace(/(\/(?:public|convite)\/)[^/?#]+/gi, '$1[token]')
+        .replace(/([?&](?:token|k)=)[^&#]+/gi, '$1[redacted]')
+    );
+    app.use(
+      morgan(
+        env.NODE_ENV === 'production'
+          ? ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"'
+          : ':method :safe-url :status :response-time ms - :res[content-length]'
+      )
+    );
   }
 
   // Body Parsing

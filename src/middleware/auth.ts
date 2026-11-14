@@ -50,7 +50,7 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
   }
 
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as AuthUser;
+    const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as AuthUser;
     req.user = {
       id: decoded.id,
       email: decoded.email,
@@ -79,7 +79,7 @@ export function optionalAuth(req: Request, res: Response, next: NextFunction): v
   }
 
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as AuthUser;
+    const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as AuthUser;
     req.user = {
       id: decoded.id,
       email: decoded.email,

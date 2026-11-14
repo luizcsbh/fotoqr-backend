@@ -13,6 +13,7 @@ import { uploadLimiter } from '../middleware/rateLimiter.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { moderateImage } from '../services/moderation.service.js';
+import { isValidPhotoKey } from '../utils/photoAccess.js';
 
 const router = Router();
 
@@ -282,7 +283,11 @@ async function resolvePhotoAccess(
   photo: { reviewStatus: 'approved' | 'pending'; eventId: number },
   req: Request
 ): Promise<string | null> {
-  if (photo.reviewStatus === 'approved') return 'public, max-age=31536000, immutable';
+  // Approved photos: anyone holding the signed URL from the gallery (k = per-photo key).
+  // Guessing sequential ids without the key no longer reveals other events' photos.
+  if (photo.reviewStatus === 'approved' && isValidPhotoKey(req.params.id as string, req.query.k)) {
+    return 'public, max-age=31536000, immutable';
+  }
   if (!req.user) return null;
 
   const [owner] = await db
@@ -291,7 +296,7 @@ async function resolvePhotoAccess(
     .where(eq(events.id, photo.eventId))
     .limit(1);
 
-  // Never let shared caches keep a private pending photo
+  // The owner always has access; never let shared caches keep these responses
   return owner?.userId === req.user.id ? 'private, no-store' : null;
 }
 

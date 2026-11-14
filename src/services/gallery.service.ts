@@ -6,6 +6,7 @@ import { db } from '../config/database.js';
 import { photos, events, Photo } from '../models/schema.js';
 import { localStorageService } from './local.storage.service.js';
 import { logger } from '../utils/logger.js';
+import { photoUrls } from '../utils/photoAccess.js';
 
 export interface PhotoWithUrl extends Omit<Photo, 'fileData' | 'thumbnailData'> {
   url: string;
@@ -75,8 +76,7 @@ export class GalleryService {
 
     // Resolve URLs pointing to database photo endpoints
     const photosWithUrl: PhotoWithUrl[] = photoList.map((photo) => {
-      let url = `/api/photos/${photo.id}/file`;
-      let thumbnailUrl = `/api/photos/${photo.id}/thumbnail`;
+      let { url, thumbnailUrl } = photoUrls(photo.id);
 
       if (photo.storageProvider === 'local' && photo.storagePath !== 'database') {
         const fullLocalPath = path.resolve(process.cwd(), 'uploads', photo.storagePath);

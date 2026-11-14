@@ -15,6 +15,7 @@ import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 
 const router = Router();
 const avatarUpload = multer({
@@ -181,7 +182,13 @@ router.post('/logout', (req: Request, res: Response) => {
 router.post('/forgot-password', authLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { email } = req.body ?? {};
-    await requestPasswordReset(email);
+    try {
+      await requestPasswordReset(email);
+    } catch (err) {
+      // A sending failure only happens for registered e-mails: answering with an error would reveal
+      // which e-mails have an account. Log it for the admin and give the same answer as always.
+      logger.error('Falha ao processar recuperação de senha:', err);
+    }
     // Always respond with success (anti-enumeration)
     res.status(200).json({
       success: true,

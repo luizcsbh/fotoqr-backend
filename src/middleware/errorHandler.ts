@@ -21,7 +21,8 @@ export function errorHandler(
   // Log sanitized error details internally
   logger.error('Erro na requisição:', err, {
     method: req.method,
-    path: req.path,
+    // Invitation links carry bearer tokens: never write them to the logs
+    path: req.path.replace(/(\/(?:public|convite)\/)[^/]+/gi, '$1[token]'),
     ip: req.ip,
   });
 
