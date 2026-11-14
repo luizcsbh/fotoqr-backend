@@ -249,6 +249,8 @@ export const eventReaders = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     active: boolean('active').default(true).notNull(),
+    // Secret part of the exclusive access link (rotating it revokes the old link)
+    accessNonce: varchar('access_nonce', { length: 64 }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -270,6 +272,8 @@ export const eventDjs = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     active: boolean('active').default(true).notNull(),
+    // Secret part of the exclusive access link (rotating it revokes the old link)
+    accessNonce: varchar('access_nonce', { length: 64 }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [

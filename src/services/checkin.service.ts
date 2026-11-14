@@ -11,6 +11,7 @@ import {
 import { eq, and, sql } from 'drizzle-orm';
 import { logAuditEvent } from './audit.service.js';
 import { getCheckinDeadline, CHECKIN_GRACE_HOURS } from '../utils/eventWindow.js';
+import { staffAccessService } from './staffAccess.service.js';
 
 export type ValidationStatus =
   | 'VALIDO'
@@ -253,16 +254,33 @@ export class CheckinService {
         throw new Error('Usuário leitor não encontrado na plataforma.');
       }
     } else {
+      const cleanEmail = String(userEmailOrId).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail) || cleanEmail.length > 255) {
+        throw Object.assign(new Error('Informe um e-mail válido para o leitor.'), { statusCode: 400 });
+      }
+
       const [u] = await db
         .select({ id: users.id })
         .from(users)
-        .where(sql`lower(${users.email}) = ${String(userEmailOrId).trim().toLowerCase()}`)
+        .where(sql`lower(${users.email}) = ${cleanEmail}`)
         .limit(1);
 
-      if (!u) {
-        throw new Error('Usuário leitor não encontrado na plataforma com este e-mail.');
+      if (u) {
+        targetUserId = u.id;
+      } else {
+        // Like DJs: create the reader's account so any e-mail can be authorized; they get in
+        // through their exclusive link, without a password
+        const namePart = cleanEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+        const [created] = await db
+          .insert(users)
+          .values({
+            email: cleanEmail,
+            name: `Leitor ${namePart.charAt(0).toUpperCase()}${namePart.slice(1)}`.slice(0, 255),
+            role: 'reader',
+          })
+          .returning({ id: users.id });
+        targetUserId = created.id;
       }
-      targetUserId = u.id;
     }
 
     const [existing] = await db
@@ -312,7 +330,7 @@ export class CheckinService {
    * Lists all authorized readers for an event.
    */
   async listReaders(eventId: number) {
-    return db
+    const list = await db
       .select({
         id: eventReaders.id,
         userId: users.id,
@@ -324,6 +342,14 @@ export class CheckinService {
       .from(eventReaders)
       .innerJoin(users, eq(eventReaders.userId, users.id))
       .where(eq(eventReaders.eventId, eventId));
+
+    // Each reader gets an exclusive link that opens only the portaria QR reader
+    return Promise.all(
+      list.map(async (reader) => ({
+        ...reader,
+        accessLink: await staffAccessService.getAccessLink('reader', eventId, reader.userId),
+      }))
+    );
   }
 }
 

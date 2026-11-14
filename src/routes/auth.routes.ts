@@ -11,7 +11,7 @@ import {
   requestPasswordReset,
   resetPasswordWithToken,
 } from '../services/auth.service.js';
-import { optionalAuth, authenticateToken } from '../middleware/auth.js';
+import { optionalAuth, authenticateToken, STAFF_COOKIE } from '../middleware/auth.js';
 import { authLimiter, registerLimiter } from '../middleware/rateLimiter.js';
 import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
@@ -155,12 +155,15 @@ router.get('/avatar/:userId', async (req: Request, res: Response, next: NextFunc
  * Logs out the user and clears authentication cookies.
  */
 router.post('/logout', (req: Request, res: Response) => {
-  res.clearCookie('fotoqr_token', {
-    path: '/',
-    httpOnly: true,
-    secure: env.NODE_ENV === 'production',
-    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-  });
+  // Clears both the regular login and a DJ/reader exclusive-link session
+  for (const cookieName of ['fotoqr_token', STAFF_COOKIE]) {
+    res.clearCookie(cookieName, {
+      path: '/',
+      httpOnly: true,
+      secure: env.NODE_ENV === 'production',
+      sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+    });
+  }
 
   if (req.session) {
     req.session.destroy(() => {

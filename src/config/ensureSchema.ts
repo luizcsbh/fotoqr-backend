@@ -29,4 +29,14 @@ export async function ensureSchema(): Promise<void> {
   } catch (err) {
     logger.error('Falha ao aplicar ajustes de schema na inicialização (event_djs):', err);
   }
+
+  try {
+    // Exclusive access links for DJs and readers (see migration 0012)
+    await db.execute(sql.raw(`
+      ALTER TABLE event_djs ADD COLUMN IF NOT EXISTS access_nonce varchar(64);
+      ALTER TABLE event_readers ADD COLUMN IF NOT EXISTS access_nonce varchar(64);
+    `));
+  } catch (err) {
+    logger.error('Falha ao aplicar ajustes de schema na inicialização (access_nonce):', err);
+  }
 }

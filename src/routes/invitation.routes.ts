@@ -10,6 +10,7 @@ import { guestService } from '../services/guest.service.js';
 import { invitationService } from '../services/invitation.service.js';
 import { deliveryService } from '../services/delivery.service.js';
 import { checkinService } from '../services/checkin.service.js';
+import { staffAccessService } from '../services/staffAccess.service.js';
 import { reportService } from '../services/report.service.js';
 import { getEventAuditLogs } from '../services/audit.service.js';
 import { db } from '../config/database.js';
@@ -700,10 +701,23 @@ router.post('/events/:id/readers', authenticateToken, requireEventAdmin, async (
 
     const reader = await checkinService.addReader(eventId, target, req.user!.id, getIp(req));
 
+    // Send the reader their exclusive link; failing to e-mail must not undo the authorization
+    const accessLink = await staffAccessService.getAccessLink('reader', eventId, reader.userId);
+    let emailSent = false;
+    let emailError: string | undefined;
+    try {
+      await staffAccessService.sendAccessEmail('reader', eventId, reader.userId);
+      emailSent = true;
+    } catch (mailError) {
+      emailError = mailError instanceof Error ? mailError.message : 'Falha ao enviar o e-mail.';
+    }
+
     res.status(201).json({
       success: true,
-      message: 'Leitor autorizado com sucesso para este evento.',
-      data: reader,
+      message: emailSent
+        ? 'Leitor autorizado e link de acesso enviado por e-mail.'
+        : 'Leitor autorizado com sucesso para este evento.',
+      data: { ...reader, accessLink, emailSent, emailError },
     });
   } catch (error) {
     next(error);

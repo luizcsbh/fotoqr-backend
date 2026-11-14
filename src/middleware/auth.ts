@@ -5,6 +5,16 @@ import { env } from '../config/env.js';
 import { db } from '../config/database.js';
 import { users } from '../models/schema.js';
 
+/**
+ * Restricted session opened by a staff member's exclusive link (DJ console or portaria reader).
+ * It can only reach the APIs of that console — see STAFF_ALLOWED_ROUTES.
+ */
+export interface StaffScope {
+  kind: 'dj' | 'reader';
+  eventId: number;
+  eventUuid: string;
+}
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -13,6 +23,30 @@ export interface AuthUser {
   avatarUrl?: string | null;
   /** Session version (users.token_version) the token was issued for */
   tv?: number;
+  /** Present only on sessions opened through an exclusive staff link */
+  scope?: StaffScope;
+}
+
+/** Cookie of staff-link sessions; kept apart so opening a link never replaces an owner's login. */
+export const STAFF_COOKIE = 'fotoqr_staff_token';
+
+const ANY_STAFF_ROUTES: Array<[string, RegExp]> = [['GET', /^\/api\/auth\/me$/]];
+const STAFF_ALLOWED_ROUTES: Record<StaffScope['kind'], Array<[string, RegExp]>> = {
+  dj: [
+    ['GET', /^\/api\/events\/[^/]+\/music$/],
+    ['DELETE', /^\/api\/events\/[^/]+\/music\/[^/]+$/],
+    ['PATCH', /^\/api\/events\/[^/]+\/music\/[^/]+\/status$/],
+    ['GET', /^\/api\/spotify\/search$/],
+  ],
+  reader: [['POST', /^\/api(\/v1)?\/checkin\/validate$/]],
+};
+
+/** Whether a staff-link session may call this route (anything else is off-limits, dashboard included). */
+function isAllowedForScope(req: Request, scope: StaffScope): boolean {
+  const path = req.originalUrl.split('?')[0].replace(/\/+$/, '');
+  return [...ANY_STAFF_ROUTES, ...STAFF_ALLOWED_ROUTES[scope.kind]].some(
+    ([method, pattern]) => req.method === method && pattern.test(path)
+  );
 }
 
 // Short cache so authenticated requests do not hit the database every time
@@ -71,8 +105,9 @@ declare global {
  * Extracts JWT token from HTTP-only cookie or Authorization header.
  */
 function extractToken(req: Request): string | null {
-  if (req.cookies && (req.cookies.fotoqr_token || req.cookies.token)) {
-    return req.cookies.fotoqr_token || req.cookies.token;
+  // A regular login wins over a staff-link session in the same browser
+  if (req.cookies && (req.cookies.fotoqr_token || req.cookies.token || req.cookies[STAFF_COOKIE])) {
+    return req.cookies.fotoqr_token || req.cookies.token || req.cookies[STAFF_COOKIE];
   }
 
   const authHeader = req.headers.authorization;
@@ -113,12 +148,24 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     return;
   }
 
+  if (decoded.scope && !isAllowedForScope(req, decoded.scope)) {
+    res.status(403).json({
+      success: false,
+      error:
+        decoded.scope.kind === 'dj'
+          ? 'Este acesso é exclusivo do painel do DJ.'
+          : 'Este acesso é exclusivo do leitor da portaria.',
+    });
+    return;
+  }
+
   req.user = {
     id: decoded.id,
     email: decoded.email,
     name: decoded.name,
     role: decoded.role || 'user',
     avatarUrl: decoded.avatarUrl || null,
+    ...(decoded.scope && { scope: decoded.scope }),
   };
   next();
 }
@@ -135,13 +182,15 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
 
   try {
     const decoded = await decodeValidToken(token);
-    if (decoded) {
+    // A staff-link session outside its console is treated as anonymous on public routes
+    if (decoded && (!decoded.scope || isAllowedForScope(req, decoded.scope))) {
       req.user = {
         id: decoded.id,
         email: decoded.email,
         name: decoded.name,
         role: decoded.role || 'user',
         avatarUrl: decoded.avatarUrl || null,
+        ...(decoded.scope && { scope: decoded.scope }),
       };
     }
   } catch {

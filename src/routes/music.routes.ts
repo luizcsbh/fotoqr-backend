@@ -6,6 +6,7 @@ import { eventService } from '../services/event.service.js';
 import { searchSpotifyTracks, searchDeezerTracks, isSpotifyAvailable } from '../services/spotify.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
+import { staffAccessService } from '../services/staffAccess.service.js';
 
 const router = Router();
 
@@ -229,7 +230,12 @@ router.get('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res:
       .innerJoin(users, eq(eventDjs.userId, users.id))
       .where(eq(eventDjs.eventId, event.id));
 
-    res.json({ success: true, data: list });
+    // Each DJ gets an exclusive link that opens only the DJ console
+    const withLinks = await Promise.all(
+      list.map(async (dj) => ({ ...dj, accessLink: await staffAccessService.getAccessLink('dj', event.id, dj.userId) }))
+    );
+
+    res.json({ success: true, data: withLinks });
   } catch (error) {
     next(error);
   }
@@ -298,17 +304,31 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
       if (!existing.active) {
         await db.update(eventDjs).set({ active: true }).where(eq(eventDjs.id, existing.id));
       }
-      res.json({ success: true, message: 'DJ autorizado com sucesso.' });
-      return;
+    } else {
+      await db.insert(eventDjs).values({
+        eventId: event.id,
+        userId: djUserId,
+        active: true,
+      });
     }
 
-    await db.insert(eventDjs).values({
-      eventId: event.id,
-      userId: djUserId,
-      active: true,
-    });
+    // Send the DJ their exclusive link; failing to e-mail must not undo the authorization
+    const accessLink = await staffAccessService.getAccessLink('dj', event.id, djUserId);
+    let emailSent = false;
+    let emailError: string | undefined;
+    try {
+      await staffAccessService.sendAccessEmail('dj', event.id, djUserId);
+      emailSent = true;
+    } catch (mailError) {
+      emailError = mailError instanceof Error ? mailError.message : 'Falha ao enviar o e-mail.';
+      logger.warn('[music] Não foi possível enviar o link do DJ por e-mail.', mailError);
+    }
 
-    res.status(201).json({ success: true, message: 'DJ autorizado com sucesso.' });
+    res.status(existing ? 200 : 201).json({
+      success: true,
+      message: emailSent ? 'DJ autorizado e link enviado por e-mail.' : 'DJ autorizado com sucesso.',
+      data: { userId: djUserId, accessLink, emailSent, emailError },
+    });
   } catch (error) {
     next(error);
   }
