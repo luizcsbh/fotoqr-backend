@@ -3,6 +3,8 @@ import { env } from './config/env.js';
 import { pool, checkDatabaseConnection } from './config/database.js';
 import { logger } from './utils/logger.js';
 import { ensureSchema } from './config/ensureSchema.js';
+import { logModerationStatus } from './services/moderation.service.js';
+import { startModerationRetryJob } from './services/moderationRetry.service.js';
 
 async function startServer() {
   const app = createApp();
@@ -25,6 +27,10 @@ async function startServer() {
   }
 
   await ensureSchema();
+
+  // Content moderation: report whether it is on, and re-check photos left unchecked by API outages
+  logModerationStatus(env.NODE_ENV);
+  startModerationRetryJob();
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     logger.info(`Servidor FotoQR rodando com sucesso na porta ${PORT} em 0.0.0.0`);

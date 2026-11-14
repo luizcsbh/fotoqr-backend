@@ -4,7 +4,7 @@ import path from 'path';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos } from '../models/schema.js';
-import { photoService } from '../services/photo.service.js';
+import { photoService, UploadResult } from '../services/photo.service.js';
 import { galleryService } from '../services/gallery.service.js';
 import { eventService } from '../services/event.service.js';
 import { localStorageService } from '../services/local.storage.service.js';
@@ -12,7 +12,7 @@ import { uploadMiddleware } from '../middleware/upload.js';
 import { uploadLimiter } from '../middleware/rateLimiter.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
-import { moderateImage } from '../services/moderation.service.js';
+import { moderateImage, ModerationResult } from '../services/moderation.service.js';
 import { isValidPhotoKey } from '../utils/photoAccess.js';
 
 const router = Router();
@@ -56,35 +56,58 @@ router.post(
         return;
       }
 
-      // Automatic moderation: photos flagged by the provider, or that it could not check,
-      // are kept but go to the owner's manual review queue instead of being published
+      // Automatic moderation (4 photos at a time): almost-certainly inappropriate photos are discarded,
+      // photos flagged by the provider or that it could not check go to the owner's review queue
       const reviewReasons = new Map<Express.Multer.File, string>();
+      const rejected: UploadResult[] = [];
+      const accepted: Express.Multer.File[] = [];
+      const verdicts = new Map<Express.Multer.File, ModerationResult>();
+      const MODERATION_CONCURRENCY = 4;
+
+      for (let i = 0; i < files.length; i += MODERATION_CONCURRENCY) {
+        await Promise.all(
+          files.slice(i, i + MODERATION_CONCURRENCY).map(async (file) => {
+            // Use file.buffer if available (memory storage), or read from disk
+            const buffer =
+              file.buffer && file.buffer.length > 0 ? file.buffer : file.path ? fs.readFileSync(file.path) : null;
+            if (buffer) verdicts.set(file, await moderateImage(buffer, file.mimetype));
+          })
+        );
+      }
 
       for (const file of files) {
-        // Use file.buffer if available (memory storage), or read from disk
-        let buffer: Buffer;
-        if (file.buffer && file.buffer.length > 0) {
-          buffer = file.buffer;
-        } else if (file.path) {
-          buffer = fs.readFileSync(file.path);
-        } else {
+        const modResult = verdicts.get(file);
+        if (modResult?.outcome === 'rejected') {
+          logger.warn(`[moderation] Photo "${file.originalname}" rejected automatically: ${modResult.reason}`);
+          rejected.push({
+            originalFilename: Buffer.from(file.originalname, 'latin1').toString('utf8').slice(0, 255),
+            storedFilename: '',
+            storageProvider: 'database',
+            storagePath: '',
+            fileSize: file.size,
+            status: 'failed',
+            error: 'Esta foto foi recusada pela moderação automática por conter conteúdo impróprio.',
+          });
           continue;
         }
-
-        const modResult = await moderateImage(buffer, file.mimetype);
-        if (modResult.outcome === 'flagged' || modResult.outcome === 'failed') {
+        if (modResult?.outcome === 'flagged' || modResult?.outcome === 'failed') {
           logger.warn(`[moderation] Photo "${file.originalname}" sent to manual review: ${modResult.reason}`);
           reviewReasons.set(file, modResult.reason ?? 'Revisão manual necessária');
         }
+        accepted.push(file);
       }
 
-      const results = await photoService.processAndUpload(files, event.id, event.storageMode, reviewReasons);
+      const results = [
+        ...(await photoService.processAndUpload(accepted, event.id, event.storageMode, reviewReasons)),
+        ...rejected,
+      ];
       const successCount = results.filter((r) => r.status === 'success').length;
       const duplicateCount = results.filter((r) => r.status === 'duplicate').length;
       const failCount = results.filter((r) => r.status === 'failed').length;
 
       let message = `${successCount} fotos enviadas com sucesso!`;
       if (duplicateCount > 0) message += ` (${duplicateCount} duplicadas ignoradas)`;
+      if (rejected.length > 0) message += ` ${rejected.length} foto(s) recusada(s) pela moderação automática.`;
       const pendingCount = results.filter((r) => r.status === 'success' && r.pendingApproval).length;
       if (pendingCount > 0) {
         message += ' As fotos aparecem na galeria depois da aprovação do anfitrião.';

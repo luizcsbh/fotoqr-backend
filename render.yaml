@@ -31,3 +31,11 @@ services:
         value: "20"
       - key: MAX_UPLOADS_PER_MINUTE
         value: "60"
+      - key: SIGHTENGINE_USER
+        sync: false
+      - key: SIGHTENGINE_SECRET
+        sync: false
+      - key: MODERATION_REVIEW_THRESHOLD
+        value: "0.6"
+      - key: MODERATION_AUTO_REJECT_THRESHOLD
+        value: "0.9"
