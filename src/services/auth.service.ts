@@ -48,6 +48,22 @@ function validatePassword(password: string): void {
   }
 }
 
+/**
+ * Rules for a password the user is choosing now (change / reset). Login keeps
+ * the basic length check so accounts with older, simpler passwords can still sign in.
+ */
+export function validateNewPasswordStrength(password: string): void {
+  validatePassword(password);
+  const missing: string[] = [];
+  if (!/[A-Z]/.test(password)) missing.push('uma letra maiúscula');
+  if (!/[a-z]/.test(password)) missing.push('uma letra minúscula');
+  if (!/[0-9]/.test(password)) missing.push('um número');
+  if (!/[^A-Za-z0-9]/.test(password)) missing.push('um caractere especial');
+  if (missing.length > 0) {
+    throw new AuthServiceError(`A senha precisa ter pelo menos ${missing.join(', ')}.`, 400);
+  }
+}
+
 function validateEmailAndPassword(email: string, password: string): void {
   validateEmail(email);
   validatePassword(password);
@@ -61,7 +77,8 @@ export async function registerWithPassword({
   const normalizedEmail = typeof email === 'string' ? normalizeEmail(email) : '';
   const normalizedName = typeof name === 'string' ? name.trim() : '';
 
-  validateEmailAndPassword(normalizedEmail, password);
+  validateEmail(normalizedEmail);
+  validateNewPasswordStrength(password);
   if (normalizedName.length < 2 || normalizedName.length > 255) {
     throw new AuthServiceError('Informe um nome entre 2 e 255 caracteres.', 400);
   }
@@ -144,7 +161,7 @@ export async function changePassword(
   if (typeof currentPassword !== 'string' || !currentPassword) {
     throw new AuthServiceError('Informe sua senha atual.', 400);
   }
-  validatePassword(newPassword);
+  validateNewPasswordStrength(newPassword);
 
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user) throw new AuthServiceError('Usuário não encontrado.', 404);
@@ -358,7 +375,7 @@ export async function resetPasswordWithToken(
   newPassword: string
 ): Promise<void> {
   validateEmail(email);
-  validatePassword(newPassword);
+  validateNewPasswordStrength(newPassword);
   if (typeof rawToken !== 'string' || !/^[0-9a-f]{96}$/i.test(rawToken.trim())) {
     throw new AuthServiceError('Token inválido ou expirado.', 400);
   }
