@@ -40,6 +40,16 @@ const uploadCover = multer({
 const REPORT_TYPES = ['guests', 'checkins', 'absent', 'deliveries'] as const;
 const REPORT_FORMATS = ['xlsx', 'csv'] as const;
 
+/**
+ * Invitation template id sent by the cover editor: '' clears it (null), a short slug is kept,
+ * anything else is rejected (undefined). The designs themselves live in the frontend.
+ */
+export const parseInvitationTemplate = (raw: unknown): string | null | undefined => {
+  if (raw === '' || raw === null) return null;
+  if (typeof raw === 'string' && /^[a-z0-9][a-z0-9-]{0,49}$/.test(raw)) return raw;
+  return undefined;
+};
+
 /** Positive integer from a route parameter, or null. */
 const parseId = (raw: unknown): number | null => {
   const text = String(raw ?? '');
@@ -124,6 +134,11 @@ router.post(
     try {
       const eventId = req.eventAccess!.eventId;
       let { coverImage, backgroundImage, location, startAt } = req.body || {};
+      const { invitationTemplate } = req.body || {};
+      if (invitationTemplate !== undefined && parseInvitationTemplate(invitationTemplate) === undefined) {
+        res.status(400).json({ success: false, error: 'Modelo de convite inválido.' });
+        return;
+      }
 
       const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
 
@@ -145,6 +160,7 @@ router.post(
       if (coverImage !== undefined) updateData.coverImage = coverImage;
       if (backgroundImage !== undefined) updateData.backgroundImage = backgroundImage;
       if (location !== undefined) updateData.location = location;
+      if (invitationTemplate !== undefined) updateData.invitationTemplate = parseInvitationTemplate(invitationTemplate);
       if (startAt !== undefined) {
         updateData.startAt = startAt ? new Date(startAt) : null;
         updateData.startDate = updateData.startAt;
@@ -162,6 +178,7 @@ router.post(
         data: {
           coverImage: updated.coverImage,
           backgroundImage: updated.backgroundImage,
+          invitationTemplate: updated.invitationTemplate,
           location: updated.location,
           startAt: updated.startAt,
         },

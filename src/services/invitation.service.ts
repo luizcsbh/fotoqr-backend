@@ -391,6 +391,7 @@ export class InvitationService {
         location: event.location,
         coverImage: event.coverImage,
         backgroundImage: event.backgroundImage,
+        invitationTemplate: event.invitationTemplate,
       },
     };
   }

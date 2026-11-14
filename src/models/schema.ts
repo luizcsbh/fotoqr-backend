@@ -79,6 +79,8 @@ export const events = pgTable(
     capacity: integer('capacity'),
     coverImage: text('cover_image'),
     backgroundImage: text('background_image'),
+    // Id of the ready-made invitation design picked in "Capa & Convite" (logo, background, colors)
+    invitationTemplate: varchar('invitation_template', { length: 50 }),
     status: varchar('status', { length: 50 }).default('published').notNull(),
     maxEntriesPerInvitation: integer('max_entries_per_invitation').default(1).notNull(),
     eventDate: timestamp('event_date', { withTimezone: true }),

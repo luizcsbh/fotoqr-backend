@@ -39,4 +39,11 @@ export async function ensureSchema(): Promise<void> {
   } catch (err) {
     logger.error('Falha ao aplicar ajustes de schema na inicialização (access_nonce):', err);
   }
+
+  try {
+    // Ready-made invitation design (see migration 0013)
+    await db.execute(sql.raw('ALTER TABLE events ADD COLUMN IF NOT EXISTS invitation_template varchar(50)'));
+  } catch (err) {
+    logger.error('Falha ao aplicar ajustes de schema na inicialização (invitation_template):', err);
+  }
 }

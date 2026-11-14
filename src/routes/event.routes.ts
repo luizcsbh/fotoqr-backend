@@ -81,6 +81,7 @@ router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next:
           coverImage: event.coverImage,
           backgroundImage: event.backgroundImage,
         }),
+        invitationTemplate: event.invitationTemplate,
         storageMode: event.storageMode,
         isActive: event.isActive,
         enableDjPlaylist: event.enableDjPlaylist,
