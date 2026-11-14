@@ -12,4 +12,21 @@ export async function ensureSchema(): Promise<void> {
   } catch (err) {
     logger.error('Falha ao aplicar ajustes de schema na inicialização (token_version):', err);
   }
+
+  try {
+    await db.execute(sql.raw(`
+      CREATE TABLE IF NOT EXISTS event_djs (
+        id SERIAL PRIMARY KEY,
+        event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS event_djs_event_id_idx ON event_djs(event_id);
+      CREATE INDEX IF NOT EXISTS event_djs_user_id_idx ON event_djs(user_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS event_djs_event_user_idx ON event_djs(event_id, user_id);
+    `));
+  } catch (err) {
+    logger.error('Falha ao aplicar ajustes de schema na inicialização (event_djs):', err);
+  }
 }

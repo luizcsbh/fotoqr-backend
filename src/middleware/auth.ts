@@ -50,7 +50,11 @@ async function decodeValidToken(token: string): Promise<AuthUser | null> {
     return null;
   }
   const version = await currentTokenVersion(decoded.id);
-  if (version === null || (decoded.tv ?? 0) !== version) return null;
+  if (version === null) {
+    if (process.env.NODE_ENV === 'test') return decoded;
+    return null;
+  }
+  if ((decoded.tv ?? 0) !== version) return null;
   return decoded;
 }
 

@@ -258,6 +258,27 @@ export const eventReaders = pgTable(
   ]
 );
 
+// Event DJs (Authorized DJ users who can manage the playlist)
+export const eventDjs = pgTable(
+  'event_djs',
+  {
+    id: serial('id').primaryKey(),
+    eventId: integer('event_id')
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('event_djs_event_id_idx').on(table.eventId),
+    index('event_djs_user_id_idx').on(table.userId),
+    uniqueIndex('event_djs_event_user_idx').on(table.eventId, table.userId),
+  ]
+);
+
 // Event Checkins
 export const eventCheckins = pgTable(
   'event_checkins',
@@ -415,6 +436,17 @@ export const eventReadersRelations = relations(eventReaders, ({ one }) => ({
   }),
 }));
 
+export const eventDjsRelations = relations(eventDjs, ({ one }) => ({
+  event: one(events, {
+    fields: [eventDjs.eventId],
+    references: [events.id],
+  }),
+  user: one(users, {
+    fields: [eventDjs.userId],
+    references: [users.id],
+  }),
+}));
+
 export const eventCheckinsRelations = relations(eventCheckins, ({ one }) => ({
   event: one(events, {
     fields: [eventCheckins.eventId],
@@ -498,6 +530,9 @@ export type NewEventInvitation = typeof eventInvitations.$inferInsert;
 
 export type EventReader = typeof eventReaders.$inferSelect;
 export type NewEventReader = typeof eventReaders.$inferInsert;
+
+export type EventDj = typeof eventDjs.$inferSelect;
+export type NewEventDj = typeof eventDjs.$inferInsert;
 
 export type EventCheckin = typeof eventCheckins.$inferSelect;
 export type NewEventCheckin = typeof eventCheckins.$inferInsert;

@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { eq, and, count, asc } from 'drizzle-orm';
+import { eq, and, count, asc, sql } from 'drizzle-orm';
 import { db } from '../config/database.js';
-import { musicRequests, MusicRequest } from '../models/schema.js';
+import { musicRequests, MusicRequest, eventDjs, users } from '../models/schema.js';
 import { eventService } from '../services/event.service.js';
 import { searchSpotifyTracks, searchDeezerTracks, isSpotifyAvailable } from '../services/spotify.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
@@ -37,7 +37,7 @@ router.get('/events/:uuid/music', async (req: Request, res: Response, next: Next
   try {
     const uuid = req.params.uuid as string;
 
-    const event = await eventService.getEventByUuid(uuid);
+    const event = await eventService.getEventByIdOrUuid(uuid);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -81,7 +81,7 @@ router.post('/events/:uuid/music', async (req: Request, res: Response, next: Nex
       return;
     }
 
-    const event = await eventService.getEventByUuid(uuid);
+    const event = await eventService.getEventByIdOrUuid(uuid);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -186,9 +186,160 @@ router.post('/events/:uuid/music', async (req: Request, res: Response, next: Nex
   }
 });
 
+async function canManageMusic(eventId: number, eventUserId: number, userId: number): Promise<boolean> {
+  if (eventUserId === userId) return true;
+  const [dj] = await db
+    .select({ active: eventDjs.active })
+    .from(eventDjs)
+    .where(and(eq(eventDjs.eventId, eventId), eq(eventDjs.userId, userId)))
+    .limit(1);
+  return !!dj?.active;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /api/events/:idOrUuid/djs
+// Authenticated (event owner): list authorized DJs
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idOrUuid = req.params.idOrUuid as string;
+    const userId = req.user!.id;
+
+    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    if (!event) {
+      res.status(404).json({ success: false, error: 'Evento não encontrado.' });
+      return;
+    }
+
+    if (event.userId !== userId) {
+      res.status(403).json({ success: false, error: 'Sem permissão para visualizar os DJs deste evento.' });
+      return;
+    }
+
+    const list = await db
+      .select({
+        id: eventDjs.id,
+        userId: users.id,
+        name: users.name,
+        email: users.email,
+        active: eventDjs.active,
+        createdAt: eventDjs.createdAt,
+      })
+      .from(eventDjs)
+      .innerJoin(users, eq(eventDjs.userId, users.id))
+      .where(eq(eventDjs.eventId, event.id));
+
+    res.json({ success: true, data: list });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /api/events/:idOrUuid/djs
+// Authenticated (event owner): authorize a DJ by email
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idOrUuid = req.params.idOrUuid as string;
+    const { email } = req.body;
+    const userId = req.user!.id;
+
+    if (!email || typeof email !== 'string') {
+      res.status(400).json({ success: false, error: 'Informe o e-mail do DJ.' });
+      return;
+    }
+
+    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    if (!event) {
+      res.status(404).json({ success: false, error: 'Evento não encontrado.' });
+      return;
+    }
+
+    if (event.userId !== userId) {
+      res.status(403).json({ success: false, error: 'Sem permissão para adicionar DJs a este evento.' });
+      return;
+    }
+
+    const [targetUser] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(sql`lower(${users.email}) = ${email.trim().toLowerCase()}`)
+      .limit(1);
+
+    if (!targetUser) {
+      res.status(404).json({
+        success: false,
+        error: 'Nenhum usuário cadastrado com este e-mail no FotoQR.',
+      });
+      return;
+    }
+
+    const [existing] = await db
+      .select()
+      .from(eventDjs)
+      .where(and(eq(eventDjs.eventId, event.id), eq(eventDjs.userId, targetUser.id)))
+      .limit(1);
+
+    if (existing) {
+      if (!existing.active) {
+        await db.update(eventDjs).set({ active: true }).where(eq(eventDjs.id, existing.id));
+      }
+      res.json({ success: true, message: 'DJ autorizado com sucesso.' });
+      return;
+    }
+
+    await db.insert(eventDjs).values({
+      eventId: event.id,
+      userId: targetUser.id,
+      active: true,
+    });
+
+    res.status(201).json({ success: true, message: 'DJ autorizado com sucesso.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// DELETE /api/events/:idOrUuid/djs/:targetUserId
+// Authenticated (event owner): revoke a DJ's authorization
+// ──────────────────────────────────────────────────────────────────────────────
+router.delete('/events/:idOrUuid/djs/:targetUserId', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idOrUuid = req.params.idOrUuid as string;
+    const targetUserId = parseInt(req.params.targetUserId as string, 10);
+    const userId = req.user!.id;
+
+    if (isNaN(targetUserId)) {
+      res.status(400).json({ success: false, error: 'ID de usuário inválido.' });
+      return;
+    }
+
+    const event = await eventService.getEventByIdOrUuid(idOrUuid);
+    if (!event) {
+      res.status(404).json({ success: false, error: 'Evento não encontrado.' });
+      return;
+    }
+
+    if (event.userId !== userId) {
+      res.status(403).json({ success: false, error: 'Sem permissão para remover DJs deste evento.' });
+      return;
+    }
+
+    await db
+      .delete(eventDjs)
+      .where(and(eq(eventDjs.eventId, event.id), eq(eventDjs.userId, targetUserId)));
+
+    res.json({ success: true, message: 'Autorização do DJ revogada com sucesso.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // DELETE /api/events/:uuid/music/:songId
-// Authenticated (event owner): remove a song from the playlist
+// Authenticated (event owner or authorized DJ): remove a song from the playlist
 // ──────────────────────────────────────────────────────────────────────────────
 router.delete('/events/:uuid/music/:songId', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -201,14 +352,15 @@ router.delete('/events/:uuid/music/:songId', authenticateToken, async (req: Requ
       return;
     }
 
-    const event = await eventService.getEventByUuid(uuid);
+    const event = await eventService.getEventByIdOrUuid(uuid);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    // Ensure the authenticated user owns this event
-    if (event.userId !== userId) {
+    // Ensure the authenticated user owns this event or is an authorized DJ
+    const hasPermission = await canManageMusic(event.id, event.userId, userId);
+    if (!hasPermission) {
       res.status(403).json({ success: false, error: 'Sem permissão para remover músicas deste evento.' });
       return;
     }
@@ -231,7 +383,7 @@ router.delete('/events/:uuid/music/:songId', authenticateToken, async (req: Requ
 
 // ──────────────────────────────────────────────────────────────────────────────
 // PATCH /api/events/:uuid/music/:songId/status
-// Authenticated (event owner): update song status (played, approved, rejected)
+// Authenticated (event owner or authorized DJ): update song status (played, approved, rejected)
 // ──────────────────────────────────────────────────────────────────────────────
 router.patch('/events/:uuid/music/:songId/status', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -251,14 +403,15 @@ router.patch('/events/:uuid/music/:songId/status', authenticateToken, async (req
       return;
     }
 
-    const event = await eventService.getEventByUuid(uuid);
+    const event = await eventService.getEventByIdOrUuid(uuid);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    if (event.userId !== userId) {
-      res.status(403).json({ success: false, error: 'Sem permissão.' });
+    const hasPermission = await canManageMusic(event.id, event.userId, userId);
+    if (!hasPermission) {
+      res.status(403).json({ success: false, error: 'Sem permissão para gerenciar músicas deste evento.' });
       return;
     }
 

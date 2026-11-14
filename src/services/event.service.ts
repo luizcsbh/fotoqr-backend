@@ -19,6 +19,9 @@ export interface CreateEventDTO {
   end_date?: string | Date;
   storageMode?: 'fallback';
   enableDjPlaylist?: boolean;
+  enable_dj_playlist?: boolean;
+  requirePhotoApproval?: boolean;
+  require_photo_approval?: boolean;
 }
 
 export interface EventWithQR extends Event {
@@ -71,7 +74,8 @@ export class EventService {
         endDate,
         storageMode,
         isActive: true,
-        enableDjPlaylist: data.enableDjPlaylist ?? false,
+        enableDjPlaylist: Boolean(data.enableDjPlaylist ?? data.enable_dj_playlist ?? false),
+        requirePhotoApproval: Boolean(data.requirePhotoApproval ?? data.require_photo_approval ?? false),
         photoCount: 0,
       })
       .returning();
