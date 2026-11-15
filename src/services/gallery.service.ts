@@ -1,4 +1,4 @@
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import fs from 'fs';
 import path from 'path';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
@@ -107,7 +107,7 @@ export class GalleryService {
   /**
    * Generates a streaming ZIP archive containing all or selected photos of an event.
    */
-  async generateZipDownload(eventId: number, photoIds?: number[]): Promise<archiver.Archiver> {
+  async generateZipDownload(eventId: number, photoIds?: number[]): Promise<ZipArchive> {
     const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
     if (!event) {
       throw new Error('Evento não encontrado para geração de download.');
@@ -136,7 +136,7 @@ export class GalleryService {
       .where(filterCondition)
       .orderBy(photos.uploadedAt);
 
-    const archive = archiver('zip', {
+    const archive = new ZipArchive({
       zlib: { level: 6 },
     });
 
