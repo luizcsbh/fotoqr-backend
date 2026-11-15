@@ -304,7 +304,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
   try {
     await deliveryService.sendMail({
       to: user.email,
-      subject: 'Redefinição de Senha — FotoQR',
+      subject: 'Redefinição de Senha — FotoQREventos',
       html: generatePasswordResetEmailHtml(user.name, resetUrl),
     });
   } catch (err) {
@@ -320,20 +320,20 @@ function generatePasswordResetEmailHtml(name: string, resetUrl: string): string 
   return `
     <!DOCTYPE html>
     <html>
-    <head><meta charset="utf-8"><title>Redefinição de Senha — FotoQR</title></head>
+    <head><meta charset="utf-8"><title>Redefinição de Senha — FotoQREventos</title></head>
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9; margin: 0; padding: 24px; color: #1e293b;">
       <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 560px; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
         <tr>
           <td style="background: linear-gradient(135deg, #4f46e5, #10b981); padding: 32px 24px; text-align: center;">
             <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 700;">🔐 Redefinição de Senha</h1>
-            <p style="color: #c7d2fe; margin: 8px 0 0 0; font-size: 14px;">FotoQR Eventos</p>
+            <p style="color: #c7d2fe; margin: 8px 0 0 0; font-size: 14px;">FotoQREventos</p>
           </td>
         </tr>
         <tr>
           <td style="padding: 32px 24px;">
             <p style="font-size: 16px; margin: 0 0 12px;">Olá, <strong>${escapeHtml(name)}</strong>!</p>
             <p style="font-size: 15px; color: #475569; line-height: 1.6; margin: 0 0 24px;">
-              Recebemos uma solicitação para redefinir a senha da sua conta no FotoQR.<br>
+              Recebemos uma solicitação para redefinir a senha da sua conta no FotoQREventos.<br>
               Clique no botão abaixo para criar uma nova senha:
             </p>
             <div style="text-align: center; margin: 28px 0;">
@@ -356,7 +356,7 @@ function generatePasswordResetEmailHtml(name: string, resetUrl: string): string 
         <tr>
           <td style="background-color: #f8fafc; padding: 16px 24px; text-align: center; border-top: 1px solid #e2e8f0;">
             <p style="font-size: 12px; color: #94a3b8; margin: 0;">
-              Enviado com segurança pela plataforma <strong>FotoQR</strong>.
+              Enviado com segurança pela plataforma <strong>FotoQREventos</strong>.
             </p>
           </td>
         </tr>

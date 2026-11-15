@@ -10,7 +10,7 @@ async function startServer() {
   const app = createApp();
   const PORT = env.PORT;
 
-  logger.info(`Iniciando servidor FotoQR Backend em modo [${env.NODE_ENV}]...`);
+  logger.info(`Iniciando servidor FotoQREventos Backend em modo [${env.NODE_ENV}]...`);
 
   // Verify Database Connection (with Neon.tech cold-start tolerance)
   try {
@@ -33,7 +33,7 @@ async function startServer() {
   startModerationRetryJob();
 
   const server = app.listen(PORT, '0.0.0.0', () => {
-    logger.info(`Servidor FotoQR rodando com sucesso na porta ${PORT} em 0.0.0.0`);
+    logger.info(`Servidor FotoQREventos rodando com sucesso na porta ${PORT} em 0.0.0.0`);
     logger.info(`URL pública do backend: ${env.BACKEND_PUBLIC_URL}`);
     logger.info(`Origem frontend permitida: ${env.FRONTEND_URL}`);
   });

@@ -1,5 +1,5 @@
 /**
- * Spotify Web API Service for FotoQR
+ * Spotify Web API Service for FotoQREventos
  *
  * Handles OAuth2 Client Credentials flow to get access tokens,
  * then proxies track search requests from the frontend.

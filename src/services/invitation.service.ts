@@ -434,7 +434,7 @@ export class InvitationService {
       // Header Banner / Title
       doc.rect(0, 0, doc.page.width, 90).fill('#1E293B');
       doc.fillColor('#FFFFFF').fontSize(22).font('Helvetica-Bold')
-         .text(event.title || 'FotoQR Convite', 40, 32, { align: 'center', width: doc.page.width - 80 });
+         .text(event.title || 'FotoQREventos Convite', 40, 32, { align: 'center', width: doc.page.width - 80 });
 
       doc.moveDown(4);
 

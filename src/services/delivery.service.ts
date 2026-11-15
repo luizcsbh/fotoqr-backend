@@ -213,7 +213,7 @@ export class DeliveryService {
           <tr>
             <td style="background-color: #f8fafc; padding: 20px 24px; text-align: center; border-top: 1px solid #e2e8f0;">
               <p style="font-size: 12px; color: #94a3b8; margin: 0;">
-                Enviado com segurança pela plataforma <strong>FotoQR</strong>.
+                Enviado com segurança pela plataforma <strong>FotoQREventos</strong>.
               </p>
             </td>
           </tr>

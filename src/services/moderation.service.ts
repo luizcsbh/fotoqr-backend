@@ -1,5 +1,5 @@
 /**
- * Content Moderation Service for FotoQR
+ * Content Moderation Service for FotoQREventos
  *
  * Uses the Sightengine API when credentials are configured (SIGHTENGINE_USER + SIGHTENGINE_SECRET),
  * otherwise moderation is disabled and every photo is treated as safe (a loud warning is logged).

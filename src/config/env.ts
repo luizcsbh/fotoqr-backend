@@ -60,7 +60,7 @@ export const env: EnvConfig = {
   SMTP_SECURE: process.env.SMTP_SECURE === 'true',
   SMTP_USER: process.env.SMTP_USER || undefined,
   SMTP_PASS: process.env.SMTP_PASS || undefined,
-  SMTP_FROM: process.env.SMTP_FROM || '"FotoQR Eventos" <noreply@fotoqr.app>',
+  SMTP_FROM: process.env.SMTP_FROM || '"FotoQREventos" <noreply@fotoqr.app>',
   BREVO_API_KEY: process.env.BREVO_API_KEY || undefined,
   // WhatsApp Cloud API
   WHATSAPP_API_TOKEN: process.env.WHATSAPP_API_TOKEN || undefined,
