@@ -10,6 +10,7 @@ import { AuthUser } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { deliveryService } from './delivery.service.js';
 import { escapeHtml } from '../utils/html.js';
+import { isUniqueViolation } from '../utils/dbErrors.js';
 import { forgetTokenVersion } from '../middleware/auth.js';
 
 export interface PasswordRegistration {
@@ -108,12 +109,7 @@ export async function registerWithPassword({
       .returning();
     return user;
   } catch (error) {
-    if (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      error.code === '23505'
-    ) {
+    if (isUniqueViolation(error)) {
       throw new AuthServiceError('Já existe uma conta com este e-mail.', 409);
     }
     throw error;
