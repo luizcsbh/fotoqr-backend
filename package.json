@@ -19,7 +19,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "drizzle-orm": "^0.39.3",
+    "drizzle-orm": "^0.45.4",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "express-session": "^1.18.1",
@@ -52,12 +52,23 @@
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^10.0.0",
-    "drizzle-kit": "^0.30.4",
+    "drizzle-kit": "^0.31.11",
     "nodemon": "^3.1.9",
     "supertest": "^7.0.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.4"
+    },
+    "readdir-glob": {
+      "minimatch": "^11.0.1"
+    },
+    "nodemon": {
+      "minimatch": "^11.0.1"
+    }
   }
 }

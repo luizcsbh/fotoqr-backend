@@ -6,6 +6,7 @@ import { eventService } from '../services/event.service.js';
 import { searchSpotifyTracks, searchDeezerTracks, isSpotifyAvailable } from '../services/spotify.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
+import { isUniqueViolation } from '../utils/dbErrors.js';
 import { staffAccessService } from '../services/staffAccess.service.js';
 
 const router = Router();
@@ -179,7 +180,7 @@ router.post('/events/:uuid/music', async (req: Request, res: Response, next: Nex
     });
   } catch (error: any) {
     // Handle unique constraint violation (race condition)
-    if (error?.code === '23505') {
+    if (isUniqueViolation(error)) {
       res.status(409).json({ success: false, error: 'Esta música já foi pedida para este evento.' });
       return;
     }
