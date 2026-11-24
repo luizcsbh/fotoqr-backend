@@ -70,9 +70,12 @@ const superAdminEmails = (): string[] =>
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
 
-const eventCount = sql<number>`(select count(*)::int from ${events} where ${events.userId} = ${users.id})`;
-const hasPassword = sql<boolean>`(${users.passwordHash} IS NOT NULL)`;
-const photoCount = sql<number>`(select count(*)::int from ${photos} join ${events} on ${events.id} = ${photos.eventId} where ${events.userId} = ${users.id})`;
+// Correlated subqueries are written with explicit aliases: in a single-table select Drizzle renders
+// columns without their table ("id"), which Postgres rejects as ambiguous inside a subquery that
+// also has an "id" column (events, photos)
+export const eventCount = sql<number>`(select count(*)::int from events ev where ev.user_id = "users"."id")`;
+export const photoCount = sql<number>`(select count(*)::int from photos ph join events ev on ev.id = ph.event_id where ev.user_id = "users"."id")`;
+const hasPassword = sql<boolean>`("users"."password_hash" IS NOT NULL)`;
 
 function toManagedUser(row: {
   id: number;
