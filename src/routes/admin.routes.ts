@@ -11,7 +11,14 @@ import { userAdminService } from '../services/userAdmin.service.js';
 const router = Router();
 router.use(authenticateToken, requirePlatformAdmin);
 
-const ROLE_LABELS: Record<string, string> = { user: 'Usuário', dj: 'DJ', super_admin: 'Super admin' };
+const ROLE_LABELS: Record<string, string> = {
+  user: 'Usuário',
+  dj: 'DJ',
+  reader: 'Leitor (portaria)',
+  super_admin: 'Super admin',
+};
+
+const FIELD_LABELS: Record<string, string> = { name: 'nome', email: 'e-mail' };
 
 const toInt = (value: unknown): number | undefined => {
   const n = parseInt(String(value ?? ''), 10);
@@ -66,8 +73,30 @@ router.get('/users', async (req: Request, res: Response, next: NextFunction) => 
 });
 
 /**
+ * POST /api/admin/users
+ * Body: { name, email, password, role? } — creates an account that can log in right away.
+ */
+router.post('/users', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { name, email, password, role } = req.body ?? {};
+    const user = await userAdminService.createUser(req.user!.id, { name, email, password, role });
+    await recordAudit({
+      ...auditContext(req),
+      action: 'USER_CREATE',
+      entityType: 'user',
+      entityId: user.id,
+      description: `Conta de ${user.email} criada com o perfil ${ROLE_LABELS[user.role] ?? user.role}`,
+      metadata: { targetEmail: user.email, targetName: user.name, role: user.role },
+    });
+    res.status(201).json({ success: true, message: 'Usuário criado com sucesso.', data: user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * PATCH /api/admin/users/:id
- * Body: { role?: 'user' | 'dj' | 'super_admin', isActive?: boolean }
+ * Body: { name?, email?, password?, role?: 'user' | 'dj' | 'reader' | 'super_admin', isActive?: boolean }
  */
 router.patch('/users/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -77,9 +106,37 @@ router.patch('/users/:id', async (req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    const { role, isActive } = req.body ?? {};
-    const { user, changed } = await userAdminService.updateUser(req.user!.id, userId, { role, isActive });
+    const { name, email, password, role, isActive } = req.body ?? {};
+    const { user, changed } = await userAdminService.updateUser(req.user!.id, userId, {
+      name,
+      email,
+      password,
+      role,
+      isActive,
+    });
     const context = auditContext(req);
+
+    const detailFields = Object.keys(changed).filter((field) => field in FIELD_LABELS);
+    if (detailFields.length > 0) {
+      await recordAudit({
+        ...context,
+        action: 'USER_UPDATE',
+        entityType: 'user',
+        entityId: user.id,
+        description: `Dados de ${user.email} alterados: ${detailFields.map((f) => FIELD_LABELS[f]).join(' e ')}`,
+        metadata: { targetEmail: user.email, changes: Object.fromEntries(detailFields.map((f) => [f, changed[f]])) },
+      });
+    }
+    if (changed.password) {
+      await recordAudit({
+        ...context,
+        action: 'USER_PASSWORD_SET',
+        entityType: 'user',
+        entityId: user.id,
+        description: `Nova senha definida para ${user.email} pelo super admin`,
+        metadata: { targetEmail: user.email },
+      });
+    }
 
     if (changed.role) {
       const from = ROLE_LABELS[String(changed.role.from)] ?? changed.role.from;

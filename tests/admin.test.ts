@@ -23,6 +23,7 @@ const managedUser = {
   createdAt: new Date(),
   eventCount: 2,
   photoCount: 40,
+  hasPassword: true,
   isProtected: false,
 };
 
@@ -45,6 +46,7 @@ describe('Super admin console', () => {
     it.each([
       ['get', '/api/admin/audit-logs'],
       ['get', '/api/admin/users'],
+      ['post', '/api/admin/users'],
       ['patch', '/api/admin/users/1'],
       ['delete', '/api/admin/users/1'],
     ] as const)('%s %s requires login', async (method, path) => {
@@ -55,6 +57,7 @@ describe('Super admin console', () => {
     it.each([
       ['get', '/api/admin/audit-logs'],
       ['get', '/api/admin/users'],
+      ['post', '/api/admin/users'],
       ['patch', '/api/admin/users/1'],
       ['delete', '/api/admin/users/1'],
     ] as const)('%s %s is forbidden to a regular user', async (method, path) => {
@@ -101,6 +104,94 @@ describe('Super admin console', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.items[0].email).toBe('maria@fotoqr.local');
       expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: 'maria', status: 'inactive', role: 'dj' }));
+    });
+
+    it('creates a user and records it in the audit trail', async () => {
+      const create = vi
+        .spyOn(userAdminService, 'createUser')
+        .mockResolvedValueOnce({ ...managedUser, eventCount: 0, photoCount: 0 });
+
+      const res = await asSuper(
+        request(app)
+          .post('/api/admin/users')
+          .send({ name: 'Maria Fotógrafa', email: 'maria@fotoqr.local', password: 'Senha@Forte1', role: 'dj' })
+      );
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.email).toBe('maria@fotoqr.local');
+      expect(create).toHaveBeenCalledWith(SUPER_ADMIN.id, {
+        name: 'Maria Fotógrafa',
+        email: 'maria@fotoqr.local',
+        password: 'Senha@Forte1',
+        role: 'dj',
+      });
+      const entry = vi.mocked(recordAudit).mock.calls[0][0];
+      expect(entry).toEqual(expect.objectContaining({ action: 'USER_CREATE', entityId: managedUser.id }));
+      expect(JSON.stringify(entry)).not.toContain('Senha@Forte1');
+    });
+
+    it('refuses to create a user with a weak password', async () => {
+      const res = await asSuper(
+        request(app).post('/api/admin/users').send({ name: 'Fraca', email: 'fraca@fotoqr.local', password: '12345678' })
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('letra maiúscula');
+    });
+
+    it('refuses to create a user with an unknown role', async () => {
+      const res = await asSuper(
+        request(app)
+          .post('/api/admin/users')
+          .send({ name: 'Perfil', email: 'perfil@fotoqr.local', password: 'Senha@Forte1', role: 'root' })
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Perfil inválido');
+    });
+
+    it('edits name and e-mail and records which fields changed', async () => {
+      const update = vi.spyOn(userAdminService, 'updateUser').mockResolvedValueOnce({
+        user: { ...managedUser, name: 'Maria Souza', email: 'maria.souza@fotoqr.local' },
+        changed: {
+          name: { from: 'Maria Fotógrafa', to: 'Maria Souza' },
+          email: { from: 'maria@fotoqr.local', to: 'maria.souza@fotoqr.local' },
+        },
+      });
+
+      const res = await asSuper(
+        request(app)
+          .patch(`/api/admin/users/${managedUser.id}`)
+          .send({ name: 'Maria Souza', email: 'maria.souza@fotoqr.local' })
+      );
+
+      expect(res.status).toBe(200);
+      expect(update).toHaveBeenCalledWith(
+        SUPER_ADMIN.id,
+        managedUser.id,
+        expect.objectContaining({ name: 'Maria Souza', email: 'maria.souza@fotoqr.local' })
+      );
+      expect(recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'USER_UPDATE',
+          description: 'Dados de maria.souza@fotoqr.local alterados: nome e e-mail',
+        })
+      );
+    });
+
+    it('records a password set by the super admin without the password itself', async () => {
+      vi.spyOn(userAdminService, 'updateUser').mockResolvedValueOnce({
+        user: managedUser,
+        changed: { password: { from: null, to: null } },
+      });
+
+      const res = await asSuper(
+        request(app).patch(`/api/admin/users/${managedUser.id}`).send({ password: 'Nova@Senha9' })
+      );
+
+      expect(res.status).toBe(200);
+      expect(recordAudit).toHaveBeenCalledTimes(1);
+      const entry = vi.mocked(recordAudit).mock.calls[0][0];
+      expect(entry.action).toBe('USER_PASSWORD_SET');
+      expect(JSON.stringify(entry)).not.toContain('Nova@Senha9');
     });
 
     it('changes a role and records it in the audit trail', async () => {
