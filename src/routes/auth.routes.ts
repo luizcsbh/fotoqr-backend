@@ -12,6 +12,7 @@ import {
   resetPasswordWithToken,
 } from '../services/auth.service.js';
 import { optionalAuth, authenticateToken, STAFF_COOKIE } from '../middleware/auth.js';
+import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 import { authLimiter, registerLimiter } from '../middleware/rateLimiter.js';
 import { User } from '../models/schema.js';
 import { env } from '../config/env.js';
@@ -41,10 +42,12 @@ function setAuthCookie(res: Response, token: string): void {
 }
 
 function serializeUser(user: User) {
+  const isSuper = isSuperOrPlatformAdmin(user.role, user.email);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
+    role: isSuper ? 'super_admin' : (user.role || 'user'),
     avatarUrl: user.avatarUrl,
     createdAt: user.createdAt,
   };

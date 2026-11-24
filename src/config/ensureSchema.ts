@@ -6,55 +6,65 @@ import { users } from '../models/schema.js';
 import { logger } from '../utils/logger.js';
 
 /**
- * Idempotently ensures the Super Admin account configured in .env exists with super_admin role
- * and up-to-date password hash.
+ * Idempotently ensures the Super Admin accounts configured in .env exist with super_admin role
+ * and up-to-date credentials.
  */
 export async function ensureSuperAdmin(): Promise<void> {
-  const adminEmail = env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+  const rawAdminEmails = env.SUPER_ADMIN_EMAIL || '';
   const adminPassword = env.SUPER_ADMIN_PASSWORD;
 
-  if (!adminEmail || !adminPassword) {
+  if (!rawAdminEmails.trim()) {
     return;
   }
 
-  try {
-    const [existing] = await db
-      .select({ id: users.id, role: users.role, passwordHash: users.passwordHash })
-      .from(users)
-      .where(sql`lower(${users.email}) = ${adminEmail}`)
-      .limit(1);
+  const emails = rawAdminEmails
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length > 0);
 
-    if (!existing) {
-      const passwordHash = await bcrypt.hash(adminPassword, 12);
-      await db.insert(users).values({
-        email: adminEmail,
-        name: 'Super Admin',
-        passwordHash,
-        role: 'super_admin',
-      });
-      logger.info(`Super Admin criado com sucesso: ${adminEmail}`);
-    } else {
-      const passwordMatches = existing.passwordHash
-        ? await bcrypt.compare(adminPassword, existing.passwordHash)
-        : false;
+  for (const adminEmail of emails) {
+    try {
+      const [existing] = await db
+        .select({ id: users.id, role: users.role, passwordHash: users.passwordHash })
+        .from(users)
+        .where(sql`lower(${users.email}) = ${adminEmail}`)
+        .limit(1);
 
-      const updates: Record<string, any> = {};
-      if (existing.role !== 'super_admin' && existing.role !== 'platform_admin') {
-        updates.role = 'super_admin';
-      }
-      if (!passwordMatches) {
-        updates.passwordHash = await bcrypt.hash(adminPassword, 12);
-        updates.tokenVersion = sql`${users.tokenVersion} + 1`;
-      }
+      if (!existing) {
+        if (adminPassword) {
+          const passwordHash = await bcrypt.hash(adminPassword, 12);
+          await db.insert(users).values({
+            email: adminEmail,
+            name: adminEmail.split('@')[0] || 'Super Admin',
+            passwordHash,
+            role: 'super_admin',
+          });
+          logger.info(`Super Admin criado com sucesso: ${adminEmail}`);
+        }
+      } else {
+        const passwordMatches = adminPassword && existing.passwordHash
+          ? await bcrypt.compare(adminPassword, existing.passwordHash)
+          : false;
 
-      if (Object.keys(updates).length > 0) {
-        updates.updatedAt = new Date();
-        await db.update(users).set(updates).where(eq(users.id, existing.id));
-        logger.info(`Super Admin atualizado com sucesso: ${adminEmail}`);
+        const updates: Record<string, any> = {};
+        if (existing.role !== 'super_admin' && existing.role !== 'platform_admin') {
+          updates.role = 'super_admin';
+        }
+        // Sync password for primary admin if provided and different
+        if (adminPassword && !passwordMatches && adminEmail === emails[0]) {
+          updates.passwordHash = await bcrypt.hash(adminPassword, 12);
+          updates.tokenVersion = sql`${users.tokenVersion} + 1`;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          updates.updatedAt = new Date();
+          await db.update(users).set(updates).where(eq(users.id, existing.id));
+          logger.info(`Super Admin atualizado com sucesso (${adminEmail}, role=super_admin)`);
+        }
       }
+    } catch (err) {
+      logger.error(`Falha ao provisionar Super Admin (${adminEmail}):`, err);
     }
-  } catch (err) {
-    logger.error('Falha ao provisionar Super Admin:', err);
   }
 }
 

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { eventService } from '../services/event.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
+import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 
 const router = Router();
 
@@ -30,7 +31,7 @@ router.post('/', authenticateToken, async (req: Request, res: Response, next: Ne
 router.get('/', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
-    const events = await eventService.getUserEvents(userId, req.user?.role);
+    const events = await eventService.getUserEvents(userId, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,
@@ -48,8 +49,8 @@ router.get('/', authenticateToken, async (req: Request, res: Response, next: Nex
 router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = req.params.idOrUuid as string;
-    const isSuper = req.user?.role === 'super_admin' || req.user?.role === 'platform_admin';
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id, req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id, req.user?.role, req.user?.email);
 
     if (!event) {
       res.status(404).json({
@@ -108,7 +109,7 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response, next: 
   try {
     const rawId = req.params.id as string;
     const userId = req.user!.id;
-    const updated = await eventService.updateEvent(rawId, userId, req.body, req.user?.role);
+    const updated = await eventService.updateEvent(rawId, userId, req.body, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,
@@ -143,7 +144,7 @@ router.patch('/:id/toggle', authenticateToken, async (req: Request, res: Respons
     }
 
     const userId = req.user!.id;
-    const updatedEvent = await eventService.toggleEventActive(eventId, userId, req.user?.role);
+    const updatedEvent = await eventService.toggleEventActive(eventId, userId, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,
@@ -185,7 +186,7 @@ router.patch('/:id/dj-playlist', authenticateToken, async (req: Request, res: Re
     }
 
     const userId = req.user!.id;
-    const updatedEvent = await eventService.setDjPlaylistEnabled(eventId, userId, enabled, req.user?.role);
+    const updatedEvent = await eventService.setDjPlaylistEnabled(eventId, userId, enabled, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,
@@ -206,8 +207,8 @@ router.patch('/:id/dj-playlist', authenticateToken, async (req: Request, res: Re
 router.get('/:id/qr-customization', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
-    const isSuper = req.user?.role === 'super_admin' || req.user?.role === 'platform_admin';
-    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId, req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId, req.user?.role, req.user?.email);
     if (!event || (event.userId !== userId && !isSuper)) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -226,14 +227,14 @@ router.get('/:id/qr-customization', authenticateToken, async (req: Request, res:
 router.put('/:id/qr-customization', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
-    const isSuper = req.user?.role === 'super_admin' || req.user?.role === 'platform_admin';
-    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId, req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId, req.user?.role, req.user?.email);
     if (!event || (event.userId !== userId && !isSuper)) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    const saved = await eventService.saveQRCustomization(event.id, userId, req.body, req.user?.role);
+    const saved = await eventService.saveQRCustomization(event.id, userId, req.body, req.user?.role, req.user?.email);
     res.status(200).json({ success: true, message: 'Personalização do QR Code salva.', data: saved });
   } catch (error) {
     next(error);
@@ -271,7 +272,7 @@ router.patch('/:id/photo-approval', authenticateToken, async (req: Request, res:
     }
 
     const userId = req.user!.id;
-    const updatedEvent = await eventService.setPhotoApprovalRequired(eventId, userId, enabled, req.user?.role);
+    const updatedEvent = await eventService.setPhotoApprovalRequired(eventId, userId, enabled, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,
@@ -308,7 +309,7 @@ router.delete('/:id', authenticateToken, async (req: Request, res: Response, nex
     }
 
     const userId = req.user!.id;
-    await eventService.deleteEvent(eventId, userId, req.user?.role);
+    await eventService.deleteEvent(eventId, userId, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,
@@ -342,7 +343,7 @@ router.get('/:id/stats', authenticateToken, async (req: Request, res: Response, 
     }
 
     const userId = req.user!.id;
-    const stats = await eventService.getEventStats(eventId, userId, req.user?.role);
+    const stats = await eventService.getEventStats(eventId, userId, req.user?.role, req.user?.email);
 
     res.status(200).json({
       success: true,

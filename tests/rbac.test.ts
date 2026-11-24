@@ -6,6 +6,8 @@ import {
   requireEventAdmin,
   requireEventReader,
   rbacService,
+  isSuperAdminEmail,
+  isSuperOrPlatformAdmin,
 } from '../src/middleware/rbac.js';
 
 describe('RBAC Middleware (Access Control)', () => {
@@ -198,6 +200,22 @@ describe('RBAC Middleware (Access Control)', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.error).toContain('permissão de leitor de QR Code');
+    });
+  });
+
+  describe('Super Admin Multi-Email Dynamic Recognition', () => {
+    it('recognizes super admin emails dynamically', () => {
+      expect(isSuperAdminEmail('admin@fotoqr.com')).toBe(true);
+      expect(isSuperAdminEmail('ADMIN@FOTOQR.COM')).toBe(true);
+      expect(isSuperAdminEmail('random@test.com')).toBe(false);
+    });
+
+    it('considers super admin email as platform admin regardless of role field', () => {
+      expect(isSuperOrPlatformAdmin('user', 'admin@fotoqr.com')).toBe(true);
+      expect(isSuperOrPlatformAdmin(undefined, 'admin@fotoqr.com')).toBe(true);
+      expect(isSuperOrPlatformAdmin('user', 'random@test.com')).toBe(false);
+      expect(isSuperOrPlatformAdmin('super_admin', 'random@test.com')).toBe(true);
+      expect(isSuperOrPlatformAdmin('platform_admin', 'random@test.com')).toBe(true);
     });
   });
 });

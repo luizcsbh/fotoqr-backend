@@ -1,13 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { db } from '../config/database.js';
-import { events, photos, Event, NewEvent, Photo } from '../models/schema.js';
+import { events, photos, Event, NewEvent, Photo, users } from '../models/schema.js';
 import { validateEventInput } from '../utils/validators.js';
 import { generateQRCode } from '../utils/qrcode.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { localStorageService } from './local.storage.service.js';
 import { QRCustomization, sanitizeQRCustomization } from '../utils/qrCustomization.js';
+import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 
 export interface CreateEventDTO {
   title: string;
@@ -27,6 +28,10 @@ export interface CreateEventDTO {
 export interface EventWithQR extends Event {
   qrCodeUrl: string;
   publicUrl: string;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+  owner_name?: string | null;
+  owner_email?: string | null;
 }
 
 export interface EventStats {
@@ -99,9 +104,10 @@ export class EventService {
     identifier: string | number,
     userId: number,
     data: any,
-    role?: string
+    role?: string,
+    email?: string
   ): Promise<EventWithQR> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const trimmed = String(identifier).trim();
 
     const isNumeric = /^\d+$/.test(trimmed);
@@ -202,14 +208,14 @@ export class EventService {
    * Numeric IDs are sequential and guessable, so they only resolve for the event owner or super admin;
    * anonymous access must use the public UUID.
    */
-  async getEventByIdOrUuid(identifier: string | number, userId?: number, role?: string): Promise<EventWithQR | null> {
+  async getEventByIdOrUuid(identifier: string | number, userId?: number, role?: string, email?: string): Promise<EventWithQR | null> {
     const trimmed = String(identifier).trim();
 
     if (!/^\d+$/.test(trimmed)) {
       return this.getEventByUuid(trimmed);
     }
 
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const whereCondition = (userId && !isSuper)
       ? and(eq(events.id, Number(trimmed)), eq(events.userId, userId))
       : eq(events.id, Number(trimmed));
@@ -245,20 +251,41 @@ export class EventService {
   /**
    * Lists all events owned by a specific authenticated user (or all platform events if super admin).
    */
-  async getUserEvents(userId: number, role?: string): Promise<EventWithQR[]> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+  async getUserEvents(userId: number, role?: string, email?: string): Promise<EventWithQR[]> {
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const userEvents = await (isSuper
-      ? db.select().from(events).orderBy(desc(events.createdAt))
-      : db.select().from(events).where(eq(events.userId, userId)).orderBy(desc(events.createdAt)));
+      ? db
+          .select({
+            event: events,
+            ownerName: users.name,
+            ownerEmail: users.email,
+          })
+          .from(events)
+          .leftJoin(users, eq(events.userId, users.id))
+          .orderBy(desc(events.createdAt))
+      : db
+          .select({
+            event: events,
+            ownerName: sql<string | null>`NULL`,
+            ownerEmail: sql<string | null>`NULL`,
+          })
+          .from(events)
+          .where(eq(events.userId, userId))
+          .orderBy(desc(events.createdAt)));
 
     const eventsWithQR = await Promise.all(
-      userEvents.map(async (ev) => {
+      userEvents.map(async (row) => {
+        const ev = row.event;
         const publicUrl = `${env.FRONTEND_URL}/e/${ev.uuid}`;
         const qrCodeUrl = await generateQRCode(publicUrl);
         return {
           ...ev,
           publicUrl,
           qrCodeUrl,
+          ownerName: row.ownerName || null,
+          ownerEmail: row.ownerEmail || null,
+          owner_name: row.ownerName || null,
+          owner_email: row.ownerEmail || null,
         };
       })
     );
@@ -269,8 +296,8 @@ export class EventService {
   /**
    * Toggles the active status of an event (enabling or pausing photo uploads).
    */
-  async toggleEventActive(eventId: number, userId: number, role?: string): Promise<Event> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+  async toggleEventActive(eventId: number, userId: number, role?: string, email?: string): Promise<Event> {
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const [event] = await db
       .select()
       .from(events)
@@ -297,8 +324,8 @@ export class EventService {
   /**
    * Turns the guests' DJ song request playlist on or off (toggles when `enabled` is omitted).
    */
-  async setDjPlaylistEnabled(eventId: number, userId: number, enabled?: boolean, role?: string): Promise<Event> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+  async setDjPlaylistEnabled(eventId: number, userId: number, enabled?: boolean, role?: string, email?: string): Promise<Event> {
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const [event] = await db
       .select()
       .from(events)
@@ -326,8 +353,8 @@ export class EventService {
    * Turns host review of guest photos on or off (toggles when `enabled` is omitted).
    * Photos already waiting stay pending until the owner approves or deletes them.
    */
-  async setPhotoApprovalRequired(eventId: number, userId: number, enabled?: boolean, role?: string): Promise<Event> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+  async setPhotoApprovalRequired(eventId: number, userId: number, enabled?: boolean, role?: string, email?: string): Promise<Event> {
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const [event] = await db
       .select()
       .from(events)
@@ -354,9 +381,9 @@ export class EventService {
   /**
    * Saves the owner's QR code / table card design for the event (validated, known fields only).
    */
-  async saveQRCustomization(eventId: number, userId: number, input: unknown, role?: string): Promise<QRCustomization> {
+  async saveQRCustomization(eventId: number, userId: number, input: unknown, role?: string, email?: string): Promise<QRCustomization> {
     const qrCustomization = sanitizeQRCustomization(input);
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+    const isSuper = isSuperOrPlatformAdmin(role, email);
 
     const [updatedEvent] = await db
       .update(events)
@@ -373,8 +400,8 @@ export class EventService {
   /**
    * Deletes an event and its associated photos.
    */
-  async deleteEvent(eventId: number, userId: number, role?: string): Promise<void> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+  async deleteEvent(eventId: number, userId: number, role?: string, email?: string): Promise<void> {
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const [event] = await db
       .select()
       .from(events)
@@ -393,8 +420,8 @@ export class EventService {
   /**
    * Computes statistics for a given event.
    */
-  async getEventStats(eventId: number, userId: number, role?: string): Promise<EventStats> {
-    const isSuper = role === 'super_admin' || role === 'platform_admin';
+  async getEventStats(eventId: number, userId: number, role?: string, email?: string): Promise<EventStats> {
+    const isSuper = isSuperOrPlatformAdmin(role, email);
     const [event] = await db
       .select()
       .from(events)

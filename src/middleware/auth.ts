@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { db } from '../config/database.js';
 import { users } from '../models/schema.js';
+import { isSuperOrPlatformAdmin } from './rbac.js';
 
 /**
  * Restricted session opened by a staff member's exclusive link (DJ console or portaria reader).
@@ -163,7 +164,7 @@ export async function authenticateToken(req: Request, res: Response, next: NextF
     id: decoded.id,
     email: decoded.email,
     name: decoded.name,
-    role: decoded.role || 'user',
+    role: isSuperOrPlatformAdmin(decoded.role, decoded.email) ? 'super_admin' : (decoded.role || 'user'),
     avatarUrl: decoded.avatarUrl || null,
     ...(decoded.scope && { scope: decoded.scope }),
   };
@@ -188,7 +189,7 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
         id: decoded.id,
         email: decoded.email,
         name: decoded.name,
-        role: decoded.role || 'user',
+        role: isSuperOrPlatformAdmin(decoded.role, decoded.email) ? 'super_admin' : (decoded.role || 'user'),
         avatarUrl: decoded.avatarUrl || null,
         ...(decoded.scope && { scope: decoded.scope }),
       };

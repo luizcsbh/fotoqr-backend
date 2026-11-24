@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/database.js';
 import { events, eventUsers, eventReaders } from '../models/schema.js';
 import { eq, and } from 'drizzle-orm';
+import { env } from '../config/env.js';
 
 export interface EventAccessContext {
   eventId: number;
@@ -97,19 +98,30 @@ export const rbacService = {
 export const { resolveEventId, getEventAccess } = rbacService;
 
 /**
- * Checks whether the given user role has super admin or platform admin privileges.
+ * Returns true if the email matches one of the emails defined in SUPER_ADMIN_EMAIL.
  */
-export function isSuperOrPlatformAdmin(role?: string): boolean {
-  return role === 'super_admin' || role === 'platform_admin';
+export function isSuperAdminEmail(email?: string): boolean {
+  if (!email || !env.SUPER_ADMIN_EMAIL) return false;
+  const configured = env.SUPER_ADMIN_EMAIL.split(',').map((e) => e.trim().toLowerCase());
+  return configured.includes(email.trim().toLowerCase());
+}
+
+/**
+ * Checks whether the given user role or email has super admin or platform admin privileges.
+ */
+export function isSuperOrPlatformAdmin(role?: string, email?: string): boolean {
+  if (role === 'super_admin' || role === 'platform_admin') return true;
+  if (isSuperAdminEmail(email)) return true;
+  return false;
 }
 
 /**
  * True when the user may manage the event (owner, co-admin, super admin or platform admin).
  * Used by routes addressed by guest/invitation id instead of event id.
  */
-export async function canAdminEvent(user: { id: number; role?: string } | undefined, eventId: number): Promise<boolean> {
+export async function canAdminEvent(user: { id: number; role?: string; email?: string } | undefined, eventId: number): Promise<boolean> {
   if (!user) return false;
-  if (isSuperOrPlatformAdmin(user.role)) return true;
+  if (isSuperOrPlatformAdmin(user.role, user.email)) return true;
   const access = await rbacService.getEventAccess(user.id, eventId);
   return access.isAdmin;
 }
@@ -126,7 +138,7 @@ export function requirePlatformAdmin(req: Request, res: Response, next: NextFunc
     return;
   }
 
-  if (!isSuperOrPlatformAdmin(req.user.role)) {
+  if (!isSuperOrPlatformAdmin(req.user.role, req.user.email)) {
     res.status(403).json({
       success: false,
       error: 'Acesso negado. Requer privilégios de Administrador da Plataforma.',
@@ -168,7 +180,7 @@ export async function requireEventAdmin(req: Request, res: Response, next: NextF
       return;
     }
 
-    if (isSuperOrPlatformAdmin(req.user.role)) {
+    if (isSuperOrPlatformAdmin(req.user.role, req.user.email)) {
       req.eventAccess = {
         eventId,
         isOwner: true,
@@ -225,7 +237,7 @@ export async function requireEventReader(req: Request, res: Response, next: Next
       return;
     }
 
-    if (isSuperOrPlatformAdmin(req.user.role)) {
+    if (isSuperOrPlatformAdmin(req.user.role, req.user.email)) {
       req.eventAccess = {
         eventId,
         isOwner: true,
