@@ -25,12 +25,12 @@ router.post('/', authenticateToken, async (req: Request, res: Response, next: Ne
 
 /**
  * GET /api/events
- * Lists all events owned by the authenticated user.
+ * Lists all events owned by the authenticated user (or all platform events if super admin).
  */
 router.get('/', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
-    const events = await eventService.getUserEvents(userId);
+    const events = await eventService.getUserEvents(userId, req.user?.role);
 
     res.status(200).json({
       success: true,
@@ -48,7 +48,8 @@ router.get('/', authenticateToken, async (req: Request, res: Response, next: Nex
 router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = req.params.idOrUuid as string;
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id);
+    const isSuper = req.user?.role === 'super_admin' || req.user?.role === 'platform_admin';
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id, req.user?.role);
 
     if (!event) {
       res.status(404).json({
@@ -76,8 +77,8 @@ router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next:
         capacity: event.capacity,
         status: event.status,
         maxEntriesPerInvitation: event.maxEntriesPerInvitation,
-        // Images can be large data: URLs, so they are only sent to the owner (cover editor)
-        ...(req.user?.id === event.userId && {
+        // Images can be large data: URLs, so they are only sent to the owner (cover editor) or super admin
+        ...((req.user?.id === event.userId || isSuper) && {
           coverImage: event.coverImage,
           backgroundImage: event.backgroundImage,
         }),
@@ -93,6 +94,26 @@ router.get('/:idOrUuid', optionalAuth, async (req: Request, res: Response, next:
         createdAt: event.createdAt,
         updatedAt: event.updatedAt,
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /api/events/:id
+ * Updates an event's details while strictly preserving its UUID and QR Code.
+ */
+router.put('/:id', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawId = req.params.id as string;
+    const userId = req.user!.id;
+    const updated = await eventService.updateEvent(rawId, userId, req.body, req.user?.role);
+
+    res.status(200).json({
+      success: true,
+      message: 'Evento atualizado com sucesso. O QR Code permanece o mesmo.',
+      data: updated,
     });
   } catch (error) {
     next(error);
@@ -122,7 +143,7 @@ router.patch('/:id/toggle', authenticateToken, async (req: Request, res: Respons
     }
 
     const userId = req.user!.id;
-    const updatedEvent = await eventService.toggleEventActive(eventId, userId);
+    const updatedEvent = await eventService.toggleEventActive(eventId, userId, req.user?.role);
 
     res.status(200).json({
       success: true,
@@ -164,7 +185,7 @@ router.patch('/:id/dj-playlist', authenticateToken, async (req: Request, res: Re
     }
 
     const userId = req.user!.id;
-    const updatedEvent = await eventService.setDjPlaylistEnabled(eventId, userId, enabled);
+    const updatedEvent = await eventService.setDjPlaylistEnabled(eventId, userId, enabled, req.user?.role);
 
     res.status(200).json({
       success: true,
@@ -185,8 +206,9 @@ router.patch('/:id/dj-playlist', authenticateToken, async (req: Request, res: Re
 router.get('/:id/qr-customization', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
-    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId);
-    if (!event || event.userId !== userId) {
+    const isSuper = req.user?.role === 'super_admin' || req.user?.role === 'platform_admin';
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId, req.user?.role);
+    if (!event || (event.userId !== userId && !isSuper)) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
@@ -204,13 +226,14 @@ router.get('/:id/qr-customization', authenticateToken, async (req: Request, res:
 router.put('/:id/qr-customization', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.id;
-    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId);
-    if (!event || event.userId !== userId) {
+    const isSuper = req.user?.role === 'super_admin' || req.user?.role === 'platform_admin';
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, userId, req.user?.role);
+    if (!event || (event.userId !== userId && !isSuper)) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    const saved = await eventService.saveQRCustomization(event.id, userId, req.body);
+    const saved = await eventService.saveQRCustomization(event.id, userId, req.body, req.user?.role);
     res.status(200).json({ success: true, message: 'Personalização do QR Code salva.', data: saved });
   } catch (error) {
     next(error);
@@ -248,7 +271,7 @@ router.patch('/:id/photo-approval', authenticateToken, async (req: Request, res:
     }
 
     const userId = req.user!.id;
-    const updatedEvent = await eventService.setPhotoApprovalRequired(eventId, userId, enabled);
+    const updatedEvent = await eventService.setPhotoApprovalRequired(eventId, userId, enabled, req.user?.role);
 
     res.status(200).json({
       success: true,
@@ -285,7 +308,7 @@ router.delete('/:id', authenticateToken, async (req: Request, res: Response, nex
     }
 
     const userId = req.user!.id;
-    await eventService.deleteEvent(eventId, userId);
+    await eventService.deleteEvent(eventId, userId, req.user?.role);
 
     res.status(200).json({
       success: true,
@@ -319,7 +342,7 @@ router.get('/:id/stats', authenticateToken, async (req: Request, res: Response, 
     }
 
     const userId = req.user!.id;
-    const stats = await eventService.getEventStats(eventId, userId);
+    const stats = await eventService.getEventStats(eventId, userId, req.user?.role);
 
     res.status(200).json({
       success: true,

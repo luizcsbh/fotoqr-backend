@@ -97,18 +97,25 @@ export const rbacService = {
 export const { resolveEventId, getEventAccess } = rbacService;
 
 /**
- * True when the user may manage the event (owner, co-admin or platform admin).
+ * Checks whether the given user role has super admin or platform admin privileges.
+ */
+export function isSuperOrPlatformAdmin(role?: string): boolean {
+  return role === 'super_admin' || role === 'platform_admin';
+}
+
+/**
+ * True when the user may manage the event (owner, co-admin, super admin or platform admin).
  * Used by routes addressed by guest/invitation id instead of event id.
  */
 export async function canAdminEvent(user: { id: number; role?: string } | undefined, eventId: number): Promise<boolean> {
   if (!user) return false;
-  if (user.role === 'platform_admin') return true;
+  if (isSuperOrPlatformAdmin(user.role)) return true;
   const access = await rbacService.getEventAccess(user.id, eventId);
   return access.isAdmin;
 }
 
 /**
- * Middleware: Requires platform administrator privileges.
+ * Middleware: Requires platform administrator or super admin privileges.
  */
 export function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): void {
   if (!req.user) {
@@ -119,7 +126,7 @@ export function requirePlatformAdmin(req: Request, res: Response, next: NextFunc
     return;
   }
 
-  if (req.user.role !== 'platform_admin') {
+  if (!isSuperOrPlatformAdmin(req.user.role)) {
     res.status(403).json({
       success: false,
       error: 'Acesso negado. Requer privilégios de Administrador da Plataforma.',
@@ -131,7 +138,7 @@ export function requirePlatformAdmin(req: Request, res: Response, next: NextFunc
 }
 
 /**
- * Middleware: Requires Event Admin (Owner, Co-admin, or Platform Admin).
+ * Middleware: Requires Event Admin (Owner, Co-admin, Super Admin, or Platform Admin).
  */
 export async function requireEventAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -161,7 +168,7 @@ export async function requireEventAdmin(req: Request, res: Response, next: NextF
       return;
     }
 
-    if (req.user.role === 'platform_admin') {
+    if (isSuperOrPlatformAdmin(req.user.role)) {
       req.eventAccess = {
         eventId,
         isOwner: true,
@@ -188,7 +195,7 @@ export async function requireEventAdmin(req: Request, res: Response, next: NextF
 }
 
 /**
- * Middleware: Requires Event Reader (Reader, Event Admin, or Platform Admin).
+ * Middleware: Requires Event Reader (Reader, Event Admin, Super Admin, or Platform Admin).
  */
 export async function requireEventReader(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -218,7 +225,7 @@ export async function requireEventReader(req: Request, res: Response, next: Next
       return;
     }
 
-    if (req.user.role === 'platform_admin') {
+    if (isSuperOrPlatformAdmin(req.user.role)) {
       req.eventAccess = {
         eventId,
         isOwner: true,

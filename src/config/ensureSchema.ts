@@ -1,12 +1,69 @@
-import { sql } from 'drizzle-orm';
+import { sql, eq } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
 import { db } from './database.js';
+import { env } from './env.js';
+import { users } from '../models/schema.js';
 import { logger } from '../utils/logger.js';
+
+/**
+ * Idempotently ensures the Super Admin account configured in .env exists with super_admin role
+ * and up-to-date password hash.
+ */
+export async function ensureSuperAdmin(): Promise<void> {
+  const adminEmail = env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+  const adminPassword = env.SUPER_ADMIN_PASSWORD;
+
+  if (!adminEmail || !adminPassword) {
+    return;
+  }
+
+  try {
+    const [existing] = await db
+      .select({ id: users.id, role: users.role, passwordHash: users.passwordHash })
+      .from(users)
+      .where(sql`lower(${users.email}) = ${adminEmail}`)
+      .limit(1);
+
+    if (!existing) {
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
+      await db.insert(users).values({
+        email: adminEmail,
+        name: 'Super Admin',
+        passwordHash,
+        role: 'super_admin',
+      });
+      logger.info(`Super Admin criado com sucesso: ${adminEmail}`);
+    } else {
+      const passwordMatches = existing.passwordHash
+        ? await bcrypt.compare(adminPassword, existing.passwordHash)
+        : false;
+
+      const updates: Record<string, any> = {};
+      if (existing.role !== 'super_admin' && existing.role !== 'platform_admin') {
+        updates.role = 'super_admin';
+      }
+      if (!passwordMatches) {
+        updates.passwordHash = await bcrypt.hash(adminPassword, 12);
+        updates.tokenVersion = sql`${users.tokenVersion} + 1`;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        updates.updatedAt = new Date();
+        await db.update(users).set(updates).where(eq(users.id, existing.id));
+        logger.info(`Super Admin atualizado com sucesso: ${adminEmail}`);
+      }
+    }
+  } catch (err) {
+    logger.error('Falha ao provisionar Super Admin:', err);
+  }
+}
 
 /**
  * Idempotent schema changes applied at startup, so a deploy never runs code that reads a column the
  * database does not have yet (migrations in this project are run by hand).
  */
 export async function ensureSchema(): Promise<void> {
+  await ensureSuperAdmin();
   try {
     await db.execute(sql.raw('ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0'));
   } catch (err) {

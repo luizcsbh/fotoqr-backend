@@ -72,6 +72,16 @@ describe('RBAC Middleware (Access Control)', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
     });
+
+    it('allows access when user has super_admin role', async () => {
+      const res = await request(app)
+        .get('/test/platform-admin')
+        .set('x-mock-user-id', '1')
+        .set('x-mock-role', 'super_admin');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
   });
 
   describe('requireEventAdmin', () => {
@@ -98,6 +108,18 @@ describe('RBAC Middleware (Access Control)', () => {
         .get('/test/event/10/admin')
         .set('x-mock-user-id', '99')
         .set('x-mock-role', 'platform_admin');
+
+      expect(res.status).toBe(200);
+      expect(res.body.eventAccess.isAdmin).toBe(true);
+    });
+
+    it('allows super_admin unconditionally', async () => {
+      vi.spyOn(rbacService, 'resolveEventId').mockResolvedValueOnce(10);
+
+      const res = await request(app)
+        .get('/test/event/10/admin')
+        .set('x-mock-user-id', '99')
+        .set('x-mock-role', 'super_admin');
 
       expect(res.status).toBe(200);
       expect(res.body.eventAccess.isAdmin).toBe(true);

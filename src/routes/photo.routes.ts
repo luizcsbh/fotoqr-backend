@@ -12,6 +12,7 @@ import { uploadMiddleware } from '../middleware/upload.js';
 import { galleryLimiter, uploadLimiter } from '../middleware/rateLimiter.js';
 import { messageWallService } from '../services/messageWall.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
+import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 import { logger } from '../utils/logger.js';
 import { moderateImage, ModerationResult } from '../services/moderation.service.js';
 import { isValidPhotoKey } from '../utils/photoAccess.js';
@@ -151,9 +152,10 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
       return;
     }
 
-    // ?review=pending lists the photos waiting for approval — only the event owner may see them
+    // ?review=pending lists the photos waiting for approval — only the event owner or super admin may see them
     const reviewStatus = req.query.review === 'pending' ? 'pending' : 'approved';
-    if (reviewStatus === 'pending' && event.userId !== req.user?.id) {
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    if (reviewStatus === 'pending' && event.userId !== req.user?.id && !isSuper) {
       res.status(403).json({ success: false, error: 'Apenas o dono do evento pode ver fotos pendentes.' });
       return;
     }
@@ -461,8 +463,9 @@ router.delete('/photos/:id', authenticateToken, async (req: Request, res: Respon
     }
 
     const userId = req.user!.id;
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
 
-    // Join with events to ensure the authenticated user owns the event
+    // Join with events to ensure the authenticated user owns the event (or is super admin)
     const [result] = await db
       .select({
         photo: photos,
@@ -470,7 +473,7 @@ router.delete('/photos/:id', authenticateToken, async (req: Request, res: Respon
       })
       .from(photos)
       .innerJoin(events, eq(photos.eventId, events.id))
-      .where(and(eq(photos.id, photoId), eq(events.userId, userId)))
+      .where(isSuper ? eq(photos.id, photoId) : and(eq(photos.id, photoId), eq(events.userId, userId)))
       .limit(1);
 
     if (!result) {
@@ -521,11 +524,12 @@ router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: 
       return;
     }
 
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
     const [result] = await db
       .select({ eventId: photos.eventId })
       .from(photos)
       .innerJoin(events, eq(photos.eventId, events.id))
-      .where(and(eq(photos.id, photoId), eq(events.userId, req.user!.id)))
+      .where(isSuper ? eq(photos.id, photoId) : and(eq(photos.id, photoId), eq(events.userId, req.user!.id)))
       .limit(1);
 
     if (!result) {
@@ -549,13 +553,14 @@ router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: 
 
 /**
  * POST /api/events/:id/photos/approve
- * Publishes every photo of the event that is waiting for review (event owner only).
+ * Publishes every photo of the event that is waiting for review (event owner or super admin).
  * Body: { photoIds?: number[] } — limits the approval to those photos.
  */
 router.post('/events/:id/photos/approve', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const event = await eventService.getEventByIdOrUuid(req.params.id as string, req.user!.id);
-    if (!event || event.userId !== req.user!.id) {
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, req.user!.id, req.user?.role);
+    if (!event || (event.userId !== req.user!.id && !isSuper)) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }

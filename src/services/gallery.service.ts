@@ -1,4 +1,4 @@
-import { ZipArchive } from 'archiver';
+import archiver from 'archiver';
 import fs from 'fs';
 import path from 'path';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
@@ -107,7 +107,7 @@ export class GalleryService {
   /**
    * Generates a streaming ZIP archive containing all or selected photos of an event.
    */
-  async generateZipDownload(eventId: number, photoIds?: number[]): Promise<ZipArchive> {
+  async generateZipDownload(eventId: number, photoIds?: number[]): Promise<archiver.Archiver> {
     const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
     if (!event) {
       throw new Error('Evento não encontrado para geração de download.');
@@ -136,17 +136,18 @@ export class GalleryService {
       .where(filterCondition)
       .orderBy(photos.uploadedAt);
 
-    const archive = new ZipArchive({
+    const createArchive: any = (archiver as any).default || archiver;
+    const archive = createArchive('zip', {
       zlib: { level: 6 },
-    });
+    }) as archiver.Archiver;
 
-    archive.on('warning', (err) => {
+    archive.on('warning', (err: unknown) => {
       logger.warn('Aviso no empacotamento ZIP:', err);
     });
 
     // Throwing inside an emitter listener would crash the process; the route listens for
     // 'error' and closes the response instead.
-    archive.on('error', (err) => {
+    archive.on('error', (err: unknown) => {
       logger.error('Erro na geração do arquivo ZIP:', err);
     });
 

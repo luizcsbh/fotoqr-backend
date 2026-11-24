@@ -8,6 +8,7 @@ import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { isUniqueViolation } from '../utils/dbErrors.js';
 import { staffAccessService } from '../services/staffAccess.service.js';
+import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 
 const router = Router();
 
@@ -188,7 +189,8 @@ router.post('/events/:uuid/music', async (req: Request, res: Response, next: Nex
   }
 });
 
-async function canManageMusic(eventId: number, eventUserId: number, userId: number): Promise<boolean> {
+async function canManageMusic(eventId: number, eventUserId: number, userId: number, role?: string): Promise<boolean> {
+  if (isSuperOrPlatformAdmin(role)) return true;
   if (eventUserId === userId) return true;
   const [dj] = await db
     .select({ active: eventDjs.active })
@@ -200,20 +202,21 @@ async function canManageMusic(eventId: number, eventUserId: number, userId: numb
 
 // ──────────────────────────────────────────────────────────────────────────────
 // GET /api/events/:idOrUuid/djs
-// Authenticated (event owner): list authorized DJs
+// Authenticated (event owner or super admin): list authorized DJs
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = req.params.idOrUuid as string;
     const userId = req.user!.id;
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    if (event.userId !== userId) {
+    if (event.userId !== userId && !isSuper) {
       res.status(403).json({ success: false, error: 'Sem permissão para visualizar os DJs deste evento.' });
       return;
     }
@@ -244,13 +247,14 @@ router.get('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res:
 
 // ──────────────────────────────────────────────────────────────────────────────
 // POST /api/events/:idOrUuid/djs
-// Authenticated (event owner): authorize a DJ by email
+// Authenticated (event owner or super admin): authorize a DJ by email
 // ──────────────────────────────────────────────────────────────────────────────
 router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = req.params.idOrUuid as string;
     const { email } = req.body;
     const userId = req.user!.id;
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
 
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       res.status(400).json({ success: false, error: 'Informe um e-mail válido para o DJ.' });
@@ -259,13 +263,13 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
 
     const cleanEmail = email.trim().toLowerCase();
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    if (event.userId !== userId) {
+    if (event.userId !== userId && !isSuper) {
       res.status(403).json({ success: false, error: 'Sem permissão para adicionar DJs a este evento.' });
       return;
     }
@@ -344,19 +348,20 @@ router.delete('/events/:idOrUuid/djs/:targetUserId', authenticateToken, async (r
     const idOrUuid = req.params.idOrUuid as string;
     const targetUserId = parseInt(req.params.targetUserId as string, 10);
     const userId = req.user!.id;
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
 
     if (isNaN(targetUserId)) {
       res.status(400).json({ success: false, error: 'ID de usuário inválido.' });
       return;
     }
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
     }
 
-    if (event.userId !== userId) {
+    if (event.userId !== userId && !isSuper) {
       res.status(403).json({ success: false, error: 'Sem permissão para remover DJs deste evento.' });
       return;
     }
@@ -392,8 +397,8 @@ router.delete('/events/:uuid/music/:songId', authenticateToken, async (req: Requ
       return;
     }
 
-    // Ensure the authenticated user owns this event or is an authorized DJ
-    const hasPermission = await canManageMusic(event.id, event.userId, userId);
+    // Ensure the authenticated user owns this event, is super admin, or is an authorized DJ
+    const hasPermission = await canManageMusic(event.id, event.userId, userId, req.user?.role);
     if (!hasPermission) {
       res.status(403).json({ success: false, error: 'Sem permissão para remover músicas deste evento.' });
       return;
@@ -443,7 +448,7 @@ router.patch('/events/:uuid/music/:songId/status', authenticateToken, async (req
       return;
     }
 
-    const hasPermission = await canManageMusic(event.id, event.userId, userId);
+    const hasPermission = await canManageMusic(event.id, event.userId, userId, req.user?.role);
     if (!hasPermission) {
       res.status(403).json({ success: false, error: 'Sem permissão para gerenciar músicas deste evento.' });
       return;

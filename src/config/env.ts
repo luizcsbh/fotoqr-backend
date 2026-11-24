@@ -28,6 +28,9 @@ export interface EnvConfig {
   // WhatsApp Cloud API — optional; falls back to log-only mode when absent
   WHATSAPP_API_TOKEN: string | undefined;
   WHATSAPP_PHONE_NUMBER_ID: string | undefined;
+  // Super Admin (Full access to all created events)
+  SUPER_ADMIN_EMAIL: string | undefined;
+  SUPER_ADMIN_PASSWORD: string | undefined;
 }
 
 const parseNumber = (val: string | undefined, defaultVal: number): number => {
@@ -65,6 +68,9 @@ export const env: EnvConfig = {
   // WhatsApp Cloud API
   WHATSAPP_API_TOKEN: process.env.WHATSAPP_API_TOKEN || undefined,
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || undefined,
+  // Super Admin
+  SUPER_ADMIN_EMAIL: process.env.SUPER_ADMIN_EMAIL || undefined,
+  SUPER_ADMIN_PASSWORD: process.env.SUPER_ADMIN_PASSWORD || undefined,
 };
 
 // In production a missing secret must stop the server: the fallbacks above are public (they are in
