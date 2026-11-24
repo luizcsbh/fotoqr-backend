@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { eventService } from '../services/event.service.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
+import { auditContext, recordAudit } from '../services/audit.service.js';
 
 const router = Router();
 
@@ -13,6 +14,15 @@ router.post('/', authenticateToken, async (req: Request, res: Response, next: Ne
   try {
     const userId = req.user!.id;
     const event = await eventService.createEvent(userId, req.body);
+    await recordAudit({
+      ...auditContext(req),
+      action: 'EVENT_CREATE',
+      entityType: 'event',
+      entityId: event.id,
+      eventId: event.id,
+      eventTitle: event.title,
+      description: `Evento "${event.title}" criado`,
+    });
 
     res.status(201).json({
       success: true,
@@ -110,6 +120,16 @@ router.put('/:id', authenticateToken, async (req: Request, res: Response, next: 
     const rawId = req.params.id as string;
     const userId = req.user!.id;
     const updated = await eventService.updateEvent(rawId, userId, req.body, req.user?.role, req.user?.email);
+    await recordAudit({
+      ...auditContext(req),
+      action: 'EVENT_UPDATE',
+      entityType: 'event',
+      entityId: updated.id,
+      eventId: updated.id,
+      eventTitle: updated.title,
+      description: `Evento "${updated.title}" editado`,
+      metadata: { fields: Object.keys(req.body ?? {}).filter((k) => !/image/i.test(k)) },
+    });
 
     res.status(200).json({
       success: true,
@@ -145,6 +165,15 @@ router.patch('/:id/toggle', authenticateToken, async (req: Request, res: Respons
 
     const userId = req.user!.id;
     const updatedEvent = await eventService.toggleEventActive(eventId, userId, req.user?.role, req.user?.email);
+    await recordAudit({
+      ...auditContext(req),
+      action: updatedEvent.isActive ? 'EVENT_ACTIVATE' : 'EVENT_PAUSE',
+      entityType: 'event',
+      entityId: updatedEvent.id,
+      eventId: updatedEvent.id,
+      eventTitle: updatedEvent.title,
+      description: `Evento "${updatedEvent.title}" ${updatedEvent.isActive ? 'ativado' : 'pausado'}`,
+    });
 
     res.status(200).json({
       success: true,
@@ -309,11 +338,25 @@ router.delete('/:id', authenticateToken, async (req: Request, res: Response, nex
     }
 
     const userId = req.user!.id;
-    await eventService.deleteEvent(eventId, userId, req.user?.role, req.user?.email);
+    const { event, photosDeleted } = await eventService.deleteEvent(eventId, userId, req.user?.role, req.user?.email);
+    await recordAudit({
+      ...auditContext(req),
+      action: 'EVENT_DELETE',
+      entityType: 'event',
+      entityId: event.id,
+      eventId: event.id,
+      eventTitle: event.title,
+      description: `Evento "${event.title}" excluído com ${photosDeleted} foto(s)`,
+      metadata: { photosDeleted, ownerUserId: event.userId, uuid: event.uuid },
+    });
 
     res.status(200).json({
       success: true,
-      message: 'Evento excluído com sucesso.',
+      message:
+        photosDeleted > 0
+          ? `Evento excluído com sucesso. ${photosDeleted} foto(s) removida(s).`
+          : 'Evento excluído com sucesso.',
+      photosDeleted,
     });
   } catch (error) {
     next(error);

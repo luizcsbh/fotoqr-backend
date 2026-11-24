@@ -1,0 +1,256 @@
+import { and, desc, eq, sql, SQL } from 'drizzle-orm';
+import { db } from '../config/database.js';
+import { events, photos, users } from '../models/schema.js';
+import { isSuperAdminEmail, isSuperOrPlatformAdmin } from '../middleware/rbac.js';
+import { forgetTokenVersion } from '../middleware/auth.js';
+import { localStorageService } from './local.storage.service.js';
+import { logger } from '../utils/logger.js';
+
+/** Roles a super admin can assign from the user management screen. */
+export const ASSIGNABLE_ROLES = ['user', 'dj', 'super_admin'] as const;
+export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
+
+export class UserAdminError extends Error {
+  constructor(message: string, public readonly statusCode: number) {
+    super(message);
+    this.name = 'UserAdminError';
+  }
+}
+
+export interface ManagedUser {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  isActive: boolean;
+  createdAt: Date;
+  eventCount: number;
+  photoCount: number;
+  /** Listed in SUPER_ADMIN_EMAIL: always super admin, cannot be changed or removed here */
+  isProtected: boolean;
+}
+
+export interface UserListFilters {
+  page?: number;
+  limit?: number;
+  search?: string;
+  role?: string;
+  status?: 'active' | 'inactive';
+}
+
+export interface UserChanges {
+  role?: string;
+  isActive?: boolean;
+}
+
+const effectiveRole = (role: string, email: string): string =>
+  isSuperOrPlatformAdmin(role, email) ? 'super_admin' : role || 'user';
+
+const eventCount = sql<number>`(select count(*)::int from ${events} where ${events.userId} = ${users.id})`;
+const photoCount = sql<number>`(select count(*)::int from ${photos} join ${events} on ${events.id} = ${photos.eventId} where ${events.userId} = ${users.id})`;
+
+function toManagedUser(row: {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  isActive: boolean;
+  createdAt: Date;
+  eventCount: number;
+  photoCount: number;
+}): ManagedUser {
+  return {
+    ...row,
+    role: effectiveRole(row.role, row.email),
+    eventCount: Number(row.eventCount) || 0,
+    photoCount: Number(row.photoCount) || 0,
+    isProtected: isSuperAdminEmail(row.email),
+  };
+}
+
+async function findUser(userId: number) {
+  const [user] = await db
+    .select({ id: users.id, name: users.name, email: users.email, role: users.role, isActive: users.isActive })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!user) throw new UserAdminError('Usuário não encontrado.', 404);
+  return user;
+}
+
+/** Nobody manages their own account here (checked before any database access). */
+function assertNotSelf(actorId: number, userId: number): void {
+  if (userId === actorId) {
+    throw new UserAdminError('Você não pode alterar a sua própria conta por aqui. Use a página Meu perfil.', 400);
+  }
+}
+
+/** Super admins listed in SUPER_ADMIN_EMAIL are managed by the server configuration only. */
+function assertNotProtected(target: { email: string }): void {
+  if (isSuperAdminEmail(target.email)) {
+    throw new UserAdminError(
+      'Esta conta é um super admin definido na configuração do servidor (SUPER_ADMIN_EMAIL) e não pode ser alterada aqui.',
+      400
+    );
+  }
+}
+
+export const userAdminService = {
+  async listUsers(filters: UserListFilters = {}) {
+    const page = Math.max(1, Math.floor(filters.page || 1));
+    const limit = Math.min(100, Math.max(1, Math.floor(filters.limit || 20)));
+
+    const conditions: SQL[] = [];
+    const search = filters.search?.trim();
+    if (search) {
+      const pattern = `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      conditions.push(sql`(${users.name} ILIKE ${pattern} OR ${users.email} ILIKE ${pattern})`);
+    }
+    if (filters.role === 'super_admin') {
+      conditions.push(sql`${users.role} IN ('super_admin', 'platform_admin')`);
+    } else if (filters.role) {
+      conditions.push(eq(users.role, filters.role));
+    }
+    if (filters.status === 'active') conditions.push(eq(users.isActive, true));
+    if (filters.status === 'inactive') conditions.push(eq(users.isActive, false));
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const rows = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        isActive: users.isActive,
+        createdAt: users.createdAt,
+        eventCount,
+        photoCount,
+      })
+      .from(users)
+      .where(where)
+      .orderBy(desc(users.createdAt), desc(users.id))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(users).where(where);
+
+    return {
+      items: rows.map(toManagedUser),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
+  },
+
+  /**
+   * Changes a user's role and/or active status. Deactivating also ends every open session.
+   * Returns the updated user and what actually changed (for the audit trail).
+   */
+  async updateUser(actorId: number, userId: number, changes: UserChanges) {
+    assertNotSelf(actorId, userId);
+    const target = await findUser(userId);
+    assertNotProtected(target);
+
+    const updates: { role?: string; isActive?: boolean } = {};
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+
+    if (changes.role !== undefined) {
+      if (!ASSIGNABLE_ROLES.includes(changes.role as AssignableRole)) {
+        throw new UserAdminError(`Perfil inválido. Use um destes: ${ASSIGNABLE_ROLES.join(', ')}.`, 400);
+      }
+      const current = effectiveRole(target.role, target.email);
+      if (changes.role !== current) {
+        updates.role = changes.role;
+        changed.role = { from: current, to: changes.role };
+      }
+    }
+
+    if (changes.isActive !== undefined) {
+      if (typeof changes.isActive !== 'boolean') {
+        throw new UserAdminError('Status inválido.', 400);
+      }
+      if (changes.isActive !== target.isActive) {
+        updates.isActive = changes.isActive;
+        changed.isActive = { from: target.isActive, to: changes.isActive };
+      }
+    }
+
+    if (Object.keys(changed).length === 0) {
+      return { user: await this.getUser(userId), changed };
+    }
+
+    // A deactivation or a role change takes effect on every open session right away
+    await db
+      .update(users)
+      .set({ ...updates, tokenVersion: sql`${users.tokenVersion} + 1`, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+    forgetTokenVersion(userId);
+
+    logger.info(`Usuário ${userId} alterado pelo super admin ${actorId}: ${JSON.stringify(changed)}`);
+    return { user: await this.getUser(userId), changed };
+  },
+
+  async getUser(userId: number): Promise<ManagedUser> {
+    const [row] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        isActive: users.isActive,
+        createdAt: users.createdAt,
+        eventCount,
+        photoCount,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!row) throw new UserAdminError('Usuário não encontrado.', 404);
+    return toManagedUser(row);
+  },
+
+  /**
+   * Permanently deletes a user together with their events and every photo of those events.
+   */
+  async deleteUser(actorId: number, userId: number) {
+    assertNotSelf(actorId, userId);
+    const target = await this.getUser(userId);
+    assertNotProtected(target);
+
+    const removed = await db.transaction(async (tx) => {
+      const ownedEvents = await tx.select({ id: events.id }).from(events).where(eq(events.userId, userId));
+      const eventIds = ownedEvents.map((e) => e.id);
+
+      let deletedPhotos: Array<{ storageProvider: string; storagePath: string }> = [];
+      if (eventIds.length > 0) {
+        deletedPhotos = await tx
+          .delete(photos)
+          .where(sql`${photos.eventId} IN (${sql.join(eventIds.map((id) => sql`${id}`), sql`, `)})`)
+          .returning({ storageProvider: photos.storageProvider, storagePath: photos.storagePath });
+        await tx.delete(events).where(eq(events.userId, userId));
+      }
+      await tx.delete(users).where(eq(users.id, userId));
+      return { eventIds, deletedPhotos };
+    });
+    forgetTokenVersion(userId);
+
+    for (const photo of removed.deletedPhotos) {
+      if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
+        await localStorageService.deletePhoto(photo.storagePath);
+      }
+    }
+    for (const eventId of removed.eventIds) {
+      await localStorageService.deleteEventFolder(eventId);
+    }
+
+    logger.info(
+      `Usuário ${userId} excluído pelo super admin ${actorId} (${removed.eventIds.length} evento(s), ${removed.deletedPhotos.length} foto(s))`
+    );
+    return {
+      user: target,
+      eventsDeleted: removed.eventIds.length,
+      photosDeleted: removed.deletedPhotos.length,
+    };
+  },
+};

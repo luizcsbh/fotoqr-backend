@@ -131,6 +131,11 @@ export async function loginWithPassword(email: string, password: string): Promis
     throw new AuthServiceError('E-mail ou senha inválidos.', 401);
   }
 
+  // Checked only after the password, so a wrong guess never reveals that the account exists
+  if (!user.isActive) {
+    throw new AuthServiceError('Esta conta foi desativada. Fale com o administrador da plataforma.', 403);
+  }
+
   return user;
 }
 

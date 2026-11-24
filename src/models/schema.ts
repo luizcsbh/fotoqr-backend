@@ -50,6 +50,8 @@ export const users = pgTable(
     role: varchar('role', { length: 50 }).default('user').notNull(),
     // Bumped on every password change/reset: login tokens carrying an older value stop working
     tokenVersion: integer('token_version').default(0).notNull(),
+    // Deactivated by a super admin: login is refused and existing sessions stop working
+    isActive: boolean('is_active').default(true).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -379,6 +381,34 @@ export const eventAuditLogs = pgTable(
   ]
 );
 
+// Platform-wide audit trail (super admin screen). Unlike event_audit_logs it has no foreign key to
+// events, so the record of an event survives the event's deletion; actor and event names are
+// snapshotted for the same reason.
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+    actorEmail: varchar('actor_email', { length: 255 }),
+    actorName: varchar('actor_name', { length: 255 }),
+    action: varchar('action', { length: 100 }).notNull(),
+    entityType: varchar('entity_type', { length: 100 }).notNull(),
+    entityId: integer('entity_id'),
+    eventId: integer('event_id'),
+    eventTitle: varchar('event_title', { length: 255 }),
+    description: text('description'),
+    metadata: jsonb('metadata'),
+    ipAddress: varchar('ip_address', { length: 45 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('audit_logs_created_at_idx').on(table.createdAt),
+    index('audit_logs_action_idx').on(table.action),
+    index('audit_logs_user_id_idx').on(table.userId),
+    index('audit_logs_event_id_idx').on(table.eventId),
+  ]
+);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   events: many(events),
@@ -569,6 +599,9 @@ export type NewInvitationDelivery = typeof invitationDeliveries.$inferInsert;
 
 export type EventAuditLog = typeof eventAuditLogs.$inferSelect;
 export type NewEventAuditLog = typeof eventAuditLogs.$inferInsert;
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type NewAuditLog = typeof auditLogs.$inferInsert;
 
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
 export type NewPasswordResetToken = typeof passwordResetTokens.$inferInsert;

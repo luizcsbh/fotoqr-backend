@@ -10,7 +10,9 @@ import {
   getUserAvatar,
   requestPasswordReset,
   resetPasswordWithToken,
+  AuthServiceError,
 } from '../services/auth.service.js';
+import { auditContext, recordAudit } from '../services/audit.service.js';
 import { optionalAuth, authenticateToken, STAFF_COOKIE } from '../middleware/auth.js';
 import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 import { authLimiter, registerLimiter } from '../middleware/rateLimiter.js';
@@ -58,6 +60,14 @@ router.post('/register', registerLimiter, authLimiter, async (req: Request, res:
     const { name, email, password } = req.body ?? {};
     const user = await registerWithPassword({ name, email, password });
     setAuthCookie(res, generateJWT(user));
+    await recordAudit({
+      actor: { id: user.id, email: user.email, name: user.name },
+      ipAddress: auditContext(req).ipAddress,
+      action: 'USER_REGISTER',
+      entityType: 'user',
+      entityId: user.id,
+      description: 'Nova conta criada',
+    });
     res.status(201).json({ success: true, user: serializeUser(user) });
   } catch (error) {
     next(error);
@@ -69,8 +79,26 @@ router.post('/login', authLimiter, async (req: Request, res: Response, next: Nex
     const { email, password } = req.body ?? {};
     const user = await loginWithPassword(email, password);
     setAuthCookie(res, generateJWT(user));
+    await recordAudit({
+      actor: { id: user.id, email: user.email, name: user.name },
+      ipAddress: auditContext(req).ipAddress,
+      action: 'AUTH_LOGIN',
+      entityType: 'user',
+      entityId: user.id,
+      description: 'Login realizado',
+    });
     res.status(200).json({ success: true, user: serializeUser(user) });
   } catch (error) {
+    if (error instanceof AuthServiceError && (error.statusCode === 401 || error.statusCode === 403)) {
+      const attempted = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 255) : null;
+      await recordAudit({
+        actor: attempted ? { id: 0, email: attempted } : null,
+        ipAddress: auditContext(req).ipAddress,
+        action: error.statusCode === 403 ? 'AUTH_LOGIN_BLOCKED' : 'AUTH_LOGIN_FAILED',
+        entityType: 'user',
+        description: error.statusCode === 403 ? 'Login recusado: conta desativada' : 'Tentativa de login com senha incorreta',
+      });
+    }
     next(error);
   }
 });
@@ -99,6 +127,13 @@ router.patch('/profile', authenticateToken, async (req: Request, res: Response, 
 router.put('/profile/password', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = await changePassword(req.user!.id, req.body?.currentPassword, req.body?.newPassword);
+    await recordAudit({
+      ...auditContext(req),
+      action: 'PASSWORD_CHANGE',
+      entityType: 'user',
+      entityId: user.id,
+      description: 'Senha alterada pelo próprio usuário',
+    });
     // The password change signs out every other session; this one gets a fresh cookie
     setAuthCookie(res, generateJWT(user));
     res.status(200).json({ success: true, message: 'Senha alterada com sucesso. As outras sessões foram encerradas.' });
@@ -220,6 +255,13 @@ router.post('/reset-password', authLimiter, async (req: Request, res: Response, 
       return;
     }
     await resetPasswordWithToken(email, token, newPassword);
+    await recordAudit({
+      actor: { id: 0, email: String(email).trim().toLowerCase().slice(0, 255) },
+      ipAddress: auditContext(req).ipAddress,
+      action: 'PASSWORD_RESET',
+      entityType: 'user',
+      description: 'Senha redefinida pelo link enviado por e-mail',
+    });
     res.status(200).json({ success: true, message: 'Senha redefinida com sucesso! Faça login com sua nova senha.' });
   } catch (error) {
     next(error);
