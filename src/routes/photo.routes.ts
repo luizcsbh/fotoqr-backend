@@ -143,7 +143,7 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
     const page = parseInt(req.query.page as string, 10) || 1;
     const limit = parseInt(req.query.limit as string, 10) || 20;
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id, req.user?.role, req.user?.email);
     if (!event) {
       res.status(404).json({
         success: false,
@@ -154,7 +154,7 @@ router.get('/events/:idOrUuid/photos', optionalAuth, async (req: Request, res: R
 
     // ?review=pending lists the photos waiting for approval — only the event owner or super admin may see them
     const reviewStatus = req.query.review === 'pending' ? 'pending' : 'approved';
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
     if (reviewStatus === 'pending' && event.userId !== req.user?.id && !isSuper) {
       res.status(403).json({ success: false, error: 'Apenas o dono do evento pode ver fotos pendentes.' });
       return;
@@ -262,7 +262,7 @@ router.get('/events/:uuid/gallery', galleryLimiter, async (req: Request, res: Re
 const handleZipDownload = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const idOrUuid = (req.params.idOrUuid || req.params.id) as string;
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, req.user?.id, req.user?.role, req.user?.email);
     if (!event) {
       res.status(404).json({
         success: false,
@@ -463,7 +463,7 @@ router.delete('/photos/:id', authenticateToken, async (req: Request, res: Respon
     }
 
     const userId = req.user!.id;
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
 
     // Join with events to ensure the authenticated user owns the event (or is super admin)
     const [result] = await db
@@ -524,7 +524,7 @@ router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: 
       return;
     }
 
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
     const [result] = await db
       .select({ eventId: photos.eventId })
       .from(photos)
@@ -558,8 +558,8 @@ router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: 
  */
 router.post('/events/:id/photos/approve', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
-    const event = await eventService.getEventByIdOrUuid(req.params.id as string, req.user!.id, req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
+    const event = await eventService.getEventByIdOrUuid(req.params.id as string, req.user!.id, req.user?.role, req.user?.email);
     if (!event || (event.userId !== req.user!.id && !isSuper)) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
