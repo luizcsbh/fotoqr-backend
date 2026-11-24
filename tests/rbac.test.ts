@@ -8,6 +8,7 @@ import {
   rbacService,
   isSuperAdminEmail,
   isSuperOrPlatformAdmin,
+  effectiveRole,
 } from '../src/middleware/rbac.js';
 
 describe('RBAC Middleware (Access Control)', () => {
@@ -22,11 +23,12 @@ describe('RBAC Middleware (Access Control)', () => {
     app.use((req: Request, _res: Response, next: NextFunction) => {
       const mockRole = req.headers['x-mock-role'] as string;
       const mockUserId = req.headers['x-mock-user-id'] as string;
+      const mockEmail = req.headers['x-mock-email'] as string;
 
       if (mockUserId) {
         req.user = {
           id: parseInt(mockUserId, 10),
-          email: 'user@test.com',
+          email: mockEmail || 'user@test.com',
           name: 'Test User',
           role: mockRole || 'user',
         };
@@ -65,25 +67,27 @@ describe('RBAC Middleware (Access Control)', () => {
       expect(res.body.error).toContain('Administrador da Plataforma');
     });
 
-    it('allows access when user has platform_admin role', async () => {
+    it('allows access to an account listed in SUPER_ADMIN_EMAIL', async () => {
       const res = await request(app)
         .get('/test/platform-admin')
         .set('x-mock-user-id', '1')
-        .set('x-mock-role', 'platform_admin');
+        .set('x-mock-email', 'admin@fotoqr.com');
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
     });
 
-    it('allows access when user has super_admin role', async () => {
-      const res = await request(app)
-        .get('/test/platform-admin')
-        .set('x-mock-user-id', '1')
-        .set('x-mock-role', 'super_admin');
+    it.each(['super_admin', 'platform_admin'])(
+      'denies a %s role whose e-mail is not in SUPER_ADMIN_EMAIL',
+      async (role) => {
+        const res = await request(app)
+          .get('/test/platform-admin')
+          .set('x-mock-user-id', '1')
+          .set('x-mock-role', role);
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-    });
+        expect(res.status).toBe(403);
+      }
+    );
   });
 
   describe('requireEventAdmin', () => {
@@ -103,28 +107,33 @@ describe('RBAC Middleware (Access Control)', () => {
       expect(res.body.error).toContain('Evento não encontrado');
     });
 
-    it('allows platform_admin unconditionally', async () => {
+    it('allows a SUPER_ADMIN_EMAIL account unconditionally', async () => {
       vi.spyOn(rbacService, 'resolveEventId').mockResolvedValueOnce(10);
 
       const res = await request(app)
         .get('/test/event/10/admin')
         .set('x-mock-user-id', '99')
-        .set('x-mock-role', 'platform_admin');
+        .set('x-mock-email', 'admin@fotoqr.com');
 
       expect(res.status).toBe(200);
       expect(res.body.eventAccess.isAdmin).toBe(true);
     });
 
-    it('allows super_admin unconditionally', async () => {
+    it('treats a stale super_admin role as a regular user of the event', async () => {
       vi.spyOn(rbacService, 'resolveEventId').mockResolvedValueOnce(10);
+      vi.spyOn(rbacService, 'getEventAccess').mockResolvedValueOnce({
+        eventId: 10,
+        isOwner: false,
+        isAdmin: false,
+        isReader: false,
+      });
 
       const res = await request(app)
         .get('/test/event/10/admin')
         .set('x-mock-user-id', '99')
         .set('x-mock-role', 'super_admin');
 
-      expect(res.status).toBe(200);
-      expect(res.body.eventAccess.isAdmin).toBe(true);
+      expect(res.status).toBe(403);
     });
 
     it('allows event owner / admin', async () => {
@@ -210,12 +219,21 @@ describe('RBAC Middleware (Access Control)', () => {
       expect(isSuperAdminEmail('random@test.com')).toBe(false);
     });
 
-    it('considers super admin email as platform admin regardless of role field', () => {
+    it('decides super admin by SUPER_ADMIN_EMAIL only, never by the role field', () => {
       expect(isSuperOrPlatformAdmin('user', 'admin@fotoqr.com')).toBe(true);
       expect(isSuperOrPlatformAdmin(undefined, 'admin@fotoqr.com')).toBe(true);
       expect(isSuperOrPlatformAdmin('user', 'random@test.com')).toBe(false);
-      expect(isSuperOrPlatformAdmin('super_admin', 'random@test.com')).toBe(true);
-      expect(isSuperOrPlatformAdmin('platform_admin', 'random@test.com')).toBe(true);
+      expect(isSuperOrPlatformAdmin('super_admin', 'random@test.com')).toBe(false);
+      expect(isSuperOrPlatformAdmin('platform_admin', 'random@test.com')).toBe(false);
+      expect(isSuperOrPlatformAdmin('super_admin')).toBe(false);
+    });
+
+    it('exposes a stale super/platform admin role as a regular user', () => {
+      expect(effectiveRole('user', 'admin@fotoqr.com')).toBe('super_admin');
+      expect(effectiveRole('super_admin', 'random@test.com')).toBe('user');
+      expect(effectiveRole('platform_admin', 'random@test.com')).toBe('user');
+      expect(effectiveRole('dj', 'random@test.com')).toBe('dj');
+      expect(effectiveRole(undefined, 'random@test.com')).toBe('user');
     });
   });
 });

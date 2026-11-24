@@ -2,15 +2,19 @@ import bcrypt from 'bcryptjs';
 import { and, desc, eq, ne, sql, SQL } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos, users } from '../models/schema.js';
-import { isSuperAdminEmail, isSuperOrPlatformAdmin } from '../middleware/rbac.js';
+import { effectiveRole, isSuperAdminEmail } from '../middleware/rbac.js';
 import { forgetTokenVersion } from '../middleware/auth.js';
 import { localStorageService } from './local.storage.service.js';
 import { logger } from '../utils/logger.js';
+import { env } from '../config/env.js';
 import { isUniqueViolation } from '../utils/dbErrors.js';
 import { normalizeEmail, validateEmail, validateNewPasswordStrength } from './auth.service.js';
 
-/** Roles a super admin can assign from the user management screen. */
-export const ASSIGNABLE_ROLES = ['user', 'dj', 'reader', 'super_admin'] as const;
+/**
+ * Roles a super admin can assign from the user management screen. Super admin is not one of them:
+ * only the e-mails in SUPER_ADMIN_EMAIL are super admins.
+ */
+export const ASSIGNABLE_ROLES = ['user', 'dj', 'reader'] as const;
 export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 export class UserAdminError extends Error {
@@ -59,8 +63,12 @@ export interface NewUserData {
   role?: string;
 }
 
-const effectiveRole = (role: string, email: string): string =>
-  isSuperOrPlatformAdmin(role, email) ? 'super_admin' : role || 'user';
+/** Lower-cased e-mails listed in SUPER_ADMIN_EMAIL */
+const superAdminEmails = (): string[] =>
+  (env.SUPER_ADMIN_EMAIL || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
 
 const eventCount = sql<number>`(select count(*)::int from ${events} where ${events.userId} = ${users.id})`;
 const hasPassword = sql<boolean>`(${users.passwordHash} IS NOT NULL)`;
@@ -150,10 +158,14 @@ export const userAdminService = {
       const pattern = `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       conditions.push(sql`(${users.name} ILIKE ${pattern} OR ${users.email} ILIKE ${pattern})`);
     }
+    const admins = superAdminEmails();
+    const isConfiguredAdmin = admins.length
+      ? sql`lower(${users.email}) IN (${sql.join(admins.map((e) => sql`${e}`), sql`, `)})`
+      : sql`false`;
     if (filters.role === 'super_admin') {
-      conditions.push(sql`${users.role} IN ('super_admin', 'platform_admin')`);
+      conditions.push(isConfiguredAdmin);
     } else if (filters.role) {
-      conditions.push(eq(users.role, filters.role));
+      conditions.push(and(eq(users.role, filters.role), sql`NOT ${isConfiguredAdmin}`)!);
     }
     if (filters.status === 'active') conditions.push(eq(users.isActive, true));
     if (filters.status === 'inactive') conditions.push(eq(users.isActive, false));

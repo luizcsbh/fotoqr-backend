@@ -107,12 +107,22 @@ export function isSuperAdminEmail(email?: string): boolean {
 }
 
 /**
- * Checks whether the given user role or email has super admin or platform admin privileges.
+ * Whether the user is a super admin. Only the e-mails in SUPER_ADMIN_EMAIL are: the role stored in
+ * the database (or carried by an old login token) is never trusted for it, so a stale
+ * 'super_admin'/'platform_admin' role grants nothing. `role` is kept for call-site compatibility.
  */
-export function isSuperOrPlatformAdmin(role?: string, email?: string): boolean {
-  if (role === 'super_admin' || role === 'platform_admin') return true;
-  if (isSuperAdminEmail(email)) return true;
-  return false;
+export function isSuperOrPlatformAdmin(_role?: string, email?: string): boolean {
+  return isSuperAdminEmail(email);
+}
+
+/**
+ * Role exposed for a user: 'super_admin' for the configured e-mails; any other account claiming a
+ * super/platform admin role is treated as a regular user.
+ */
+export function effectiveRole(role: string | null | undefined, email?: string): string {
+  if (isSuperAdminEmail(email)) return 'super_admin';
+  if (!role || role === 'super_admin' || role === 'platform_admin') return 'user';
+  return role;
 }
 
 /**

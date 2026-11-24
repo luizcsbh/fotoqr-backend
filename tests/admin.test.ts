@@ -138,6 +138,27 @@ describe('Super admin console', () => {
       expect(res.body.error).toContain('letra maiúscula');
     });
 
+    it('refuses to make anyone super admin from the screen', async () => {
+      const res = await asSuper(
+        request(app)
+          .post('/api/admin/users')
+          .send({ name: 'Novo Admin', email: 'novo-admin@fotoqr.local', password: 'Senha@Forte1', role: 'super_admin' })
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Perfil inválido');
+    });
+
+    it('denies the admin console to a token claiming super_admin with an unlisted e-mail', async () => {
+      const staleToken = generateJWT({
+        id: 999914,
+        email: 'antigo-admin@fotoqr.local',
+        name: 'Antigo',
+        role: 'super_admin',
+      } as never);
+      const res = await request(app).get('/api/admin/users').set('Authorization', `Bearer ${staleToken}`);
+      expect(res.status).toBe(403);
+    });
+
     it('refuses to create a user with an unknown role', async () => {
       const res = await asSuper(
         request(app)
@@ -196,20 +217,24 @@ describe('Super admin console', () => {
 
     it('changes a role and records it in the audit trail', async () => {
       const update = vi.spyOn(userAdminService, 'updateUser').mockResolvedValueOnce({
-        user: { ...managedUser, role: 'super_admin' },
-        changed: { role: { from: 'dj', to: 'super_admin' } },
+        user: { ...managedUser, role: 'reader' },
+        changed: { role: { from: 'dj', to: 'reader' } },
       });
 
-      const res = await asSuper(request(app).patch(`/api/admin/users/${managedUser.id}`).send({ role: 'super_admin' }));
+      const res = await asSuper(request(app).patch(`/api/admin/users/${managedUser.id}`).send({ role: 'reader' }));
 
       expect(res.status).toBe(200);
-      expect(update).toHaveBeenCalledWith(SUPER_ADMIN.id, managedUser.id, { role: 'super_admin', isActive: undefined });
+      expect(update).toHaveBeenCalledWith(
+        SUPER_ADMIN.id,
+        managedUser.id,
+        expect.objectContaining({ role: 'reader', isActive: undefined })
+      );
       expect(recordAudit).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'USER_ROLE_CHANGE',
           entityId: managedUser.id,
           actor: expect.objectContaining({ id: SUPER_ADMIN.id }),
-          description: 'Perfil de maria@fotoqr.local alterado de DJ para Super admin',
+          description: 'Perfil de maria@fotoqr.local alterado de DJ para Leitor (portaria)',
         })
       );
     });
@@ -266,6 +291,30 @@ describe('Super admin console', () => {
           metadata: expect.objectContaining({ eventsDeleted: 2, photosDeleted: 40, targetEmail: managedUser.email }),
         })
       );
+    });
+  });
+
+  describe('event list', () => {
+    it('lists only their own events for an account left with a stale super_admin role', async () => {
+      const staleToken = generateJWT({
+        id: 999915,
+        email: 'ex-admin@fotoqr.local',
+        name: 'Ex Admin',
+        role: 'super_admin',
+      } as never);
+      const list = vi.spyOn(eventService, 'getUserEvents').mockResolvedValueOnce([]);
+
+      const res = await request(app).get('/api/events').set('Authorization', `Bearer ${staleToken}`);
+
+      expect(res.status).toBe(200);
+      // Treated as a regular user: the service then filters the events by owner
+      expect(list).toHaveBeenCalledWith(999915, 'user', 'ex-admin@fotoqr.local');
+    });
+
+    it('lists every event for a SUPER_ADMIN_EMAIL account', async () => {
+      const list = vi.spyOn(eventService, 'getUserEvents').mockResolvedValueOnce([]);
+      await asSuper(request(app).get('/api/events'));
+      expect(list).toHaveBeenCalledWith(SUPER_ADMIN.id, 'super_admin', SUPER_ADMIN.email);
     });
   });
 
