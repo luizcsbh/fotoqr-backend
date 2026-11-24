@@ -59,16 +59,19 @@ export function forgetTokenVersion(userId: number): void {
   tokenVersionCache.delete(userId);
 }
 
+/** Session version a deactivated account answers with: no token carries it, so every session fails. */
+const DEACTIVATED_VERSION = -1;
+
 /** Current session version of the user, or null when the user no longer exists. */
 async function currentTokenVersion(userId: number): Promise<number | null> {
   const cached = tokenVersionCache.get(userId);
   if (cached && Date.now() - cached.at < TOKEN_VERSION_TTL_MS) return cached.version;
   const [row] = await db
-    .select({ tokenVersion: users.tokenVersion })
+    .select({ tokenVersion: users.tokenVersion, isActive: users.isActive })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  const version = row ? row.tokenVersion : null;
+  const version = row ? (row.isActive ? row.tokenVersion : DEACTIVATED_VERSION) : null;
   tokenVersionCache.set(userId, { version, at: Date.now() });
   return version;
 }

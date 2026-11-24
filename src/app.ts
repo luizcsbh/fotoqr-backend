@@ -19,6 +19,7 @@ import musicRoutes from './routes/music.routes.js';
 import staffRoutes from './routes/staff.routes.js';
 import messageRoutes from './routes/message.routes.js';
 import invitationRoutes from './routes/invitation.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 import { getUserAvatar } from './services/auth.service.js';
 
 export const createApp = (): Express => {
@@ -149,6 +150,7 @@ export const createApp = (): Express => {
 
   // Route Mounting
   app.use('/api/auth', authRoutes);
+  app.use('/api/admin', adminRoutes);
   app.use('/api/events', eventRoutes);
   app.use('/api', photoRoutes);
   app.use('/api', musicRoutes);

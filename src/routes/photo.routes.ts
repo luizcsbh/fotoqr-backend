@@ -16,6 +16,7 @@ import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 import { logger } from '../utils/logger.js';
 import { moderateImage, ModerationResult } from '../services/moderation.service.js';
 import { isValidPhotoKey } from '../utils/photoAccess.js';
+import { auditContext, recordAudit } from '../services/audit.service.js';
 
 const router = Router();
 
@@ -503,6 +504,17 @@ router.delete('/photos/:id', authenticateToken, async (req: Request, res: Respon
         .where(eq(events.id, result.event.id));
     }
 
+    await recordAudit({
+      ...auditContext(req),
+      action: 'PHOTO_DELETE',
+      entityType: 'photo',
+      entityId: photoId,
+      eventId: result.event.id,
+      eventTitle: result.event.title,
+      description: `Foto "${result.photo.originalFilename}" excluída`,
+      metadata: { reviewStatus: result.photo.reviewStatus },
+    });
+
     res.status(200).json({
       success: true,
       message: 'Foto excluída com sucesso.',
@@ -526,7 +538,7 @@ router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: 
 
     const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
     const [result] = await db
-      .select({ eventId: photos.eventId })
+      .select({ eventId: photos.eventId, eventTitle: events.title })
       .from(photos)
       .innerJoin(events, eq(photos.eventId, events.id))
       .where(isSuper ? eq(photos.id, photoId) : and(eq(photos.id, photoId), eq(events.userId, req.user!.id)))
@@ -541,6 +553,17 @@ router.post('/photos/:id/approve', authenticateToken, async (req: Request, res: 
     }
 
     const approved = await photoService.approvePhotos(result.eventId, [photoId]);
+    if (approved > 0) {
+      await recordAudit({
+        ...auditContext(req),
+        action: 'PHOTO_APPROVE',
+        entityType: 'photo',
+        entityId: photoId,
+        eventId: result.eventId,
+        eventTitle: result.eventTitle,
+        description: 'Foto aprovada e publicada na galeria',
+      });
+    }
     res.status(200).json({
       success: true,
       approved,
@@ -571,6 +594,17 @@ router.post('/events/:id/photos/approve', authenticateToken, async (req: Request
       : undefined;
 
     const approved = await photoService.approvePhotos(event.id, photoIds);
+    if (approved > 0) {
+      await recordAudit({
+        ...auditContext(req),
+        action: 'PHOTO_APPROVE_BULK',
+        entityType: 'photo',
+        eventId: event.id,
+        eventTitle: event.title,
+        description: `${approved} foto(s) aprovada(s) de uma vez`,
+        metadata: { approved },
+      });
+    }
     res.status(200).json({
       success: true,
       approved,

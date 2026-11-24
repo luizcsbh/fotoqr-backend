@@ -400,7 +400,15 @@ export class EventService {
   /**
    * Deletes an event and its associated photos.
    */
-  async deleteEvent(eventId: number, userId: number, role?: string, email?: string): Promise<void> {
+  /**
+   * Deletes an event together with every photo uploaded to it (database rows and stored files).
+   */
+  async deleteEvent(
+    eventId: number,
+    userId: number,
+    role?: string,
+    email?: string
+  ): Promise<{ event: Event; photosDeleted: number }> {
     const isSuper = isSuperOrPlatformAdmin(role, email);
     const [event] = await db
       .select()
@@ -412,9 +420,30 @@ export class EventService {
       throw new Error('Evento não encontrado ou acesso não autorizado.');
     }
 
-    await db.delete(events).where(eq(events.id, eventId));
+    // Photos are removed explicitly (not only through ON DELETE CASCADE), in the same transaction as
+    // the event, so an event is never deleted while its photos stay behind
+    const deletedPhotos = await db.transaction(async (tx) => {
+      const removed = await tx
+        .delete(photos)
+        .where(eq(photos.eventId, eventId))
+        .returning({ storageProvider: photos.storageProvider, storagePath: photos.storagePath });
+      await tx.delete(events).where(eq(events.id, eventId));
+      return removed;
+    });
+
+    // Files kept outside the database (local disk) go after the commit; a leftover file is harmless,
+    // a photo row without its event is not
+    for (const photo of deletedPhotos) {
+      if (photo.storageProvider === 'local' || photo.storageProvider === 'supabase') {
+        await localStorageService.deletePhoto(photo.storagePath);
+      }
+    }
     await localStorageService.deleteEventFolder(eventId);
-    logger.info(`Evento ${eventId} excluído com sucesso pelo usuário ID ${userId} (role: ${role || 'user'})`);
+
+    logger.info(
+      `Evento ${eventId} excluído pelo usuário ID ${userId} (role: ${role || 'user'}) com ${deletedPhotos.length} foto(s)`
+    );
+    return { event, photosDeleted: deletedPhotos.length };
   }
 
   /**
