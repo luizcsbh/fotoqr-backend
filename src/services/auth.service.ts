@@ -27,9 +27,9 @@ export class AuthServiceError extends Error {
   }
 }
 
-const normalizeEmail = (email: string): string => email.trim().toLowerCase();
+export const normalizeEmail = (email: string): string => email.trim().toLowerCase();
 
-function validateEmail(email: unknown): asserts email is string {
+export function validateEmail(email: unknown): asserts email is string {
   if (
     typeof email !== 'string' ||
     !email.trim() ||

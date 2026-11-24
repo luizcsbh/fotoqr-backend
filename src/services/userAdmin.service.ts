@@ -1,13 +1,16 @@
-import { and, desc, eq, sql, SQL } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
+import { and, desc, eq, ne, sql, SQL } from 'drizzle-orm';
 import { db } from '../config/database.js';
 import { events, photos, users } from '../models/schema.js';
 import { isSuperAdminEmail, isSuperOrPlatformAdmin } from '../middleware/rbac.js';
 import { forgetTokenVersion } from '../middleware/auth.js';
 import { localStorageService } from './local.storage.service.js';
 import { logger } from '../utils/logger.js';
+import { isUniqueViolation } from '../utils/dbErrors.js';
+import { normalizeEmail, validateEmail, validateNewPasswordStrength } from './auth.service.js';
 
 /** Roles a super admin can assign from the user management screen. */
-export const ASSIGNABLE_ROLES = ['user', 'dj', 'super_admin'] as const;
+export const ASSIGNABLE_ROLES = ['user', 'dj', 'reader', 'super_admin'] as const;
 export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 export class UserAdminError extends Error {
@@ -26,6 +29,8 @@ export interface ManagedUser {
   createdAt: Date;
   eventCount: number;
   photoCount: number;
+  /** False for DJ/reader accounts created by an exclusive link: they have no password to log in */
+  hasPassword: boolean;
   /** Listed in SUPER_ADMIN_EMAIL: always super admin, cannot be changed or removed here */
   isProtected: boolean;
 }
@@ -39,14 +44,26 @@ export interface UserListFilters {
 }
 
 export interface UserChanges {
+  name?: string;
+  email?: string;
+  /** New password (never returned nor logged) */
+  password?: string;
   role?: string;
   isActive?: boolean;
+}
+
+export interface NewUserData {
+  name: string;
+  email: string;
+  password: string;
+  role?: string;
 }
 
 const effectiveRole = (role: string, email: string): string =>
   isSuperOrPlatformAdmin(role, email) ? 'super_admin' : role || 'user';
 
 const eventCount = sql<number>`(select count(*)::int from ${events} where ${events.userId} = ${users.id})`;
+const hasPassword = sql<boolean>`(${users.passwordHash} IS NOT NULL)`;
 const photoCount = sql<number>`(select count(*)::int from ${photos} join ${events} on ${events.id} = ${photos.eventId} where ${events.userId} = ${users.id})`;
 
 function toManagedUser(row: {
@@ -58,9 +75,11 @@ function toManagedUser(row: {
   createdAt: Date;
   eventCount: number;
   photoCount: number;
+  hasPassword: boolean;
 }): ManagedUser {
   return {
     ...row,
+    hasPassword: Boolean(row.hasPassword),
     role: effectiveRole(row.role, row.email),
     eventCount: Number(row.eventCount) || 0,
     photoCount: Number(row.photoCount) || 0,
@@ -76,6 +95,31 @@ async function findUser(userId: number) {
     .limit(1);
   if (!user) throw new UserAdminError('Usuário não encontrado.', 404);
   return user;
+}
+
+function validateName(name: unknown): string {
+  const normalized = typeof name === 'string' ? name.trim() : '';
+  if (normalized.length < 2 || normalized.length > 255) {
+    throw new UserAdminError('Informe um nome entre 2 e 255 caracteres.', 400);
+  }
+  return normalized;
+}
+
+function validateRole(role: unknown): AssignableRole {
+  if (!ASSIGNABLE_ROLES.includes(role as AssignableRole)) {
+    throw new UserAdminError(`Perfil inválido. Use um destes: ${ASSIGNABLE_ROLES.join(', ')}.`, 400);
+  }
+  return role as AssignableRole;
+}
+
+/** One account per e-mail (any account, with or without a password). */
+async function assertEmailAvailable(email: string, exceptUserId?: number): Promise<void> {
+  const conditions = [sql`lower(${users.email}) = ${email}`];
+  if (exceptUserId) conditions.push(ne(users.id, exceptUserId));
+  const [existing] = await db.select({ id: users.id }).from(users).where(and(...conditions)).limit(1);
+  if (existing) {
+    throw new UserAdminError('Já existe uma conta com este e-mail. Procure-a na lista para editá-la.', 409);
+  }
 }
 
 /** Nobody manages their own account here (checked before any database access). */
@@ -125,6 +169,7 @@ export const userAdminService = {
         createdAt: users.createdAt,
         eventCount,
         photoCount,
+        hasPassword,
       })
       .from(users)
       .where(where)
@@ -144,7 +189,37 @@ export const userAdminService = {
   },
 
   /**
-   * Changes a user's role and/or active status. Deactivating also ends every open session.
+   * Creates an account with a password (the person can log in right away).
+   */
+  async createUser(actorId: number, data: NewUserData): Promise<ManagedUser> {
+    const name = validateName(data?.name);
+    const email = typeof data?.email === 'string' ? normalizeEmail(data.email) : '';
+    validateEmail(email);
+    validateNewPasswordStrength(data?.password);
+    const role = validateRole(data?.role ?? 'user');
+    if (isSuperAdminEmail(email)) {
+      throw new UserAdminError('Este e-mail é de um super admin definido na configuração do servidor.', 400);
+    }
+    await assertEmailAvailable(email);
+
+    const passwordHash = await bcrypt.hash(data.password, 12);
+    try {
+      const [created] = await db
+        .insert(users)
+        .values({ name, email, passwordHash, role })
+        .returning({ id: users.id });
+      logger.info(`Usuário ${created.id} (${email}, ${role}) criado pelo super admin ${actorId}`);
+      return this.getUser(created.id);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new UserAdminError('Já existe uma conta com este e-mail.', 409);
+      }
+      throw error;
+    }
+  },
+
+  /**
+   * Changes a user's details, password, role and/or active status. Deactivating also ends every open session.
    * Returns the updated user and what actually changed (for the audit trail).
    */
   async updateUser(actorId: number, userId: number, changes: UserChanges) {
@@ -152,17 +227,43 @@ export const userAdminService = {
     const target = await findUser(userId);
     assertNotProtected(target);
 
-    const updates: { role?: string; isActive?: boolean } = {};
+    const updates: { name?: string; email?: string; passwordHash?: string; role?: string; isActive?: boolean } = {};
     const changed: Record<string, { from: unknown; to: unknown }> = {};
 
-    if (changes.role !== undefined) {
-      if (!ASSIGNABLE_ROLES.includes(changes.role as AssignableRole)) {
-        throw new UserAdminError(`Perfil inválido. Use um destes: ${ASSIGNABLE_ROLES.join(', ')}.`, 400);
+    if (changes.name !== undefined) {
+      const name = validateName(changes.name);
+      if (name !== target.name) {
+        updates.name = name;
+        changed.name = { from: target.name, to: name };
       }
+    }
+
+    if (changes.email !== undefined) {
+      const email = typeof changes.email === 'string' ? normalizeEmail(changes.email) : '';
+      validateEmail(email);
+      if (email !== target.email.toLowerCase()) {
+        if (isSuperAdminEmail(email)) {
+          throw new UserAdminError('Este e-mail é de um super admin definido na configuração do servidor.', 400);
+        }
+        await assertEmailAvailable(email, userId);
+        updates.email = email;
+        changed.email = { from: target.email, to: email };
+      }
+    }
+
+    if (changes.password !== undefined && changes.password !== '') {
+      validateNewPasswordStrength(changes.password);
+      updates.passwordHash = await bcrypt.hash(changes.password, 12);
+      // The value itself is never recorded
+      changed.password = { from: null, to: null };
+    }
+
+    if (changes.role !== undefined) {
+      const role = validateRole(changes.role);
       const current = effectiveRole(target.role, target.email);
-      if (changes.role !== current) {
-        updates.role = changes.role;
-        changed.role = { from: current, to: changes.role };
+      if (role !== current) {
+        updates.role = role;
+        changed.role = { from: current, to: role };
       }
     }
 
@@ -180,14 +281,26 @@ export const userAdminService = {
       return { user: await this.getUser(userId), changed };
     }
 
-    // A deactivation or a role change takes effect on every open session right away
-    await db
-      .update(users)
-      .set({ ...updates, tokenVersion: sql`${users.tokenVersion} + 1`, updatedAt: new Date() })
-      .where(eq(users.id, userId));
-    forgetTokenVersion(userId);
+    // A new password, e-mail, role or a deactivation takes effect on every open session right away
+    const endsSessions = Boolean(changed.password || changed.email || changed.role || changed.isActive);
+    try {
+      await db
+        .update(users)
+        .set({
+          ...updates,
+          ...(endsSessions && { tokenVersion: sql`${users.tokenVersion} + 1` }),
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new UserAdminError('Já existe uma conta com este e-mail.', 409);
+      }
+      throw error;
+    }
+    if (endsSessions) forgetTokenVersion(userId);
 
-    logger.info(`Usuário ${userId} alterado pelo super admin ${actorId}: ${JSON.stringify(changed)}`);
+    logger.info(`Usuário ${userId} alterado pelo super admin ${actorId}: ${Object.keys(changed).join(', ')}`);
     return { user: await this.getUser(userId), changed };
   },
 
@@ -202,6 +315,7 @@ export const userAdminService = {
         createdAt: users.createdAt,
         eventCount,
         photoCount,
+        hasPassword,
       })
       .from(users)
       .where(eq(users.id, userId))
