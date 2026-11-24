@@ -12,7 +12,7 @@ import { deliveryService } from './delivery.service.js';
 import { escapeHtml } from '../utils/html.js';
 import { isUniqueViolation } from '../utils/dbErrors.js';
 import { forgetTokenVersion } from '../middleware/auth.js';
-import { isSuperOrPlatformAdmin } from '../middleware/rbac.js';
+import { effectiveRole } from '../middleware/rbac.js';
 
 export interface PasswordRegistration {
   name: string;
@@ -242,12 +242,11 @@ export async function getUserAvatar(userId: number): Promise<{ data: Buffer; mim
  * Generates an application JWT for session management.
  */
 export function generateJWT(user: User | AuthUser): string {
-  const isSuper = isSuperOrPlatformAdmin((user as any).role, user.email);
   const payload: AuthUser = {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: isSuper ? 'super_admin' : ((user as any).role || 'user'),
+    role: effectiveRole((user as any).role, user.email),
     avatarUrl: user.avatarUrl,
     tv: (user as any).tokenVersion ?? (user as any).tv ?? 0,
   };

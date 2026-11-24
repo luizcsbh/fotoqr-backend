@@ -189,8 +189,14 @@ router.post('/events/:uuid/music', async (req: Request, res: Response, next: Nex
   }
 });
 
-async function canManageMusic(eventId: number, eventUserId: number, userId: number, role?: string): Promise<boolean> {
-  if (isSuperOrPlatformAdmin(role)) return true;
+async function canManageMusic(
+  eventId: number,
+  eventUserId: number,
+  userId: number,
+  role?: string,
+  email?: string
+): Promise<boolean> {
+  if (isSuperOrPlatformAdmin(role, email)) return true;
   if (eventUserId === userId) return true;
   const [dj] = await db
     .select({ active: eventDjs.active })
@@ -208,9 +214,9 @@ router.get('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res:
   try {
     const idOrUuid = req.params.idOrUuid as string;
     const userId = req.user!.id;
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role, req.user?.email);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -254,7 +260,7 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
     const idOrUuid = req.params.idOrUuid as string;
     const { email } = req.body;
     const userId = req.user!.id;
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
 
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       res.status(400).json({ success: false, error: 'Informe um e-mail válido para o DJ.' });
@@ -263,7 +269,7 @@ router.post('/events/:idOrUuid/djs', authenticateToken, async (req: Request, res
 
     const cleanEmail = email.trim().toLowerCase();
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role, req.user?.email);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -348,14 +354,14 @@ router.delete('/events/:idOrUuid/djs/:targetUserId', authenticateToken, async (r
     const idOrUuid = req.params.idOrUuid as string;
     const targetUserId = parseInt(req.params.targetUserId as string, 10);
     const userId = req.user!.id;
-    const isSuper = isSuperOrPlatformAdmin(req.user?.role);
+    const isSuper = isSuperOrPlatformAdmin(req.user?.role, req.user?.email);
 
     if (isNaN(targetUserId)) {
       res.status(400).json({ success: false, error: 'ID de usuário inválido.' });
       return;
     }
 
-    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role);
+    const event = await eventService.getEventByIdOrUuid(idOrUuid, userId, req.user?.role, req.user?.email);
     if (!event) {
       res.status(404).json({ success: false, error: 'Evento não encontrado.' });
       return;
@@ -398,7 +404,7 @@ router.delete('/events/:uuid/music/:songId', authenticateToken, async (req: Requ
     }
 
     // Ensure the authenticated user owns this event, is super admin, or is an authorized DJ
-    const hasPermission = await canManageMusic(event.id, event.userId, userId, req.user?.role);
+    const hasPermission = await canManageMusic(event.id, event.userId, userId, req.user?.role, req.user?.email);
     if (!hasPermission) {
       res.status(403).json({ success: false, error: 'Sem permissão para remover músicas deste evento.' });
       return;
@@ -448,7 +454,7 @@ router.patch('/events/:uuid/music/:songId/status', authenticateToken, async (req
       return;
     }
 
-    const hasPermission = await canManageMusic(event.id, event.userId, userId, req.user?.role);
+    const hasPermission = await canManageMusic(event.id, event.userId, userId, req.user?.role, req.user?.email);
     if (!hasPermission) {
       res.status(403).json({ success: false, error: 'Sem permissão para gerenciar músicas deste evento.' });
       return;

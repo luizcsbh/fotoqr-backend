@@ -13,14 +13,35 @@ export async function ensureSuperAdmin(): Promise<void> {
   const rawAdminEmails = env.SUPER_ADMIN_EMAIL || '';
   const adminPassword = env.SUPER_ADMIN_PASSWORD;
 
-  if (!rawAdminEmails.trim()) {
-    return;
-  }
-
   const emails = rawAdminEmails
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter((e) => e.length > 0);
+
+  // Only SUPER_ADMIN_EMAIL accounts are super admins: any other account left with a super/platform
+  // admin role (e.g. an e-mail removed from the list) goes back to a regular user, and its open
+  // sessions end so the change takes effect right away
+  try {
+    const notConfigured = emails.length
+      ? sql`lower(${users.email}) NOT IN (${sql.join(emails.map((e) => sql`${e}`), sql`, `)})`
+      : sql`true`;
+    const demoted = await db
+      .update(users)
+      .set({ role: 'user', tokenVersion: sql`${users.tokenVersion} + 1`, updatedAt: new Date() })
+      .where(sql`${users.role} IN ('super_admin', 'platform_admin') AND ${notConfigured}`)
+      .returning({ id: users.id });
+    if (demoted.length > 0) {
+      logger.warn(
+        `${demoted.length} conta(s) fora do SUPER_ADMIN_EMAIL deixaram de ser super admin (IDs: ${demoted.map((u) => u.id).join(', ')})`
+      );
+    }
+  } catch (err) {
+    logger.error('Falha ao rebaixar contas super admin fora do SUPER_ADMIN_EMAIL:', err);
+  }
+
+  if (emails.length === 0) {
+    return;
+  }
 
   for (const adminEmail of emails) {
     try {

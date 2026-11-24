@@ -96,7 +96,7 @@ router.post('/users', async (req: Request, res: Response, next: NextFunction) =>
 
 /**
  * PATCH /api/admin/users/:id
- * Body: { name?, email?, password?, role?: 'user' | 'dj' | 'reader' | 'super_admin', isActive?: boolean }
+ * Body: { name?, email?, password?, role?: 'user' | 'dj' | 'reader', isActive?: boolean }
  */
 router.patch('/users/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
